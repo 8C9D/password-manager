@@ -3,7 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 
 import { SettingsService } from '../../core/services/settings.service';
-import { isBackendError } from '../../core/services/tauri-invoke';
+import { formatBackendError } from '../../core/services/tauri-invoke';
 
 interface Preset {
   label: string;
@@ -161,7 +161,7 @@ export class SettingsComponent implements OnInit {
       const s = await this.settings.load();
       this.autoLockSecs = s.autoLockSecs;
     } catch (e) {
-      this.errorMsg.set(formatError(e));
+      this.errorMsg.set(formatBackendError(e));
     } finally {
       this.loading.set(false);
     }
@@ -183,17 +183,9 @@ export class SettingsComponent implements OnInit {
       this.savedMsg.set('Settings saved.');
       setTimeout(() => this.savedMsg.set(null), 3000);
     } catch (e) {
-      this.errorMsg.set(formatError(e));
+      this.errorMsg.set(formatBackendError(e));
     } finally {
       this.busy.set(false);
     }
   }
-}
-
-function formatError(e: unknown): string {
-  if (isBackendError(e)) {
-    if (e.kind === 'validation') return e.message.replace(/^validation:\s*/, '');
-    return e.message;
-  }
-  return e instanceof Error ? e.message : String(e);
 }

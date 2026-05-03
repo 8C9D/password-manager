@@ -6,7 +6,7 @@ import {
   GeneratorOptions,
 } from '../../core/models/generator.model';
 import { GeneratorService } from '../../core/services/generator.service';
-import { isBackendError } from '../../core/services/tauri-invoke';
+import { formatBackendError } from '../../core/services/tauri-invoke';
 
 @Component({
   selector: 'app-password-generator-panel',
@@ -156,7 +156,7 @@ export class PasswordGeneratorPanelComponent implements OnInit {
         this.current.set(pw);
       } catch (e) {
         this.current.set('');
-        this.error.set(formatError(e));
+        this.error.set(formatBackendError(e));
       } finally {
         this.busy.set(false);
       }
@@ -166,12 +166,4 @@ export class PasswordGeneratorPanelComponent implements OnInit {
   use(): void {
     if (this.current()) this.accept.emit(this.current());
   }
-}
-
-function formatError(e: unknown): string {
-  if (isBackendError(e)) {
-    if (e.kind === 'validation') return e.message.replace(/^validation:\s*/, '');
-    return e.message;
-  }
-  return e instanceof Error ? e.message : String(e);
 }

@@ -5,7 +5,9 @@ import { RouterLink } from '@angular/router';
 import { Category } from '../../core/models/category.model';
 import { CategoryService } from '../../core/services/category.service';
 import { ConfirmService } from '../../core/services/confirm.service';
-import { isBackendError } from '../../core/services/tauri-invoke';
+import { formatBackendError } from '../../core/services/tauri-invoke';
+
+const CATEGORY_ERROR_OVERRIDES = { entry_not_found: 'Category not found.' };
 
 @Component({
   selector: 'app-category-manage',
@@ -148,7 +150,7 @@ export class CategoryManageComponent implements OnInit {
     try {
       await this.categories.list();
     } catch (e) {
-      this.errorMsg.set(formatError(e));
+      this.errorMsg.set(formatBackendError(e, CATEGORY_ERROR_OVERRIDES));
     }
   }
 
@@ -160,7 +162,7 @@ export class CategoryManageComponent implements OnInit {
       await this.categories.create(this.newName.trim());
       this.newName = '';
     } catch (e) {
-      this.errorMsg.set(formatError(e));
+      this.errorMsg.set(formatBackendError(e, CATEGORY_ERROR_OVERRIDES));
     } finally {
       this.busy.set(false);
     }
@@ -185,7 +187,7 @@ export class CategoryManageComponent implements OnInit {
       await this.categories.rename(id, this.editingName.trim());
       this.cancelEdit();
     } catch (e) {
-      this.errorMsg.set(formatError(e));
+      this.errorMsg.set(formatBackendError(e, CATEGORY_ERROR_OVERRIDES));
     } finally {
       this.busy.set(false);
     }
@@ -204,18 +206,9 @@ export class CategoryManageComponent implements OnInit {
     try {
       await this.categories.remove(c.id);
     } catch (e) {
-      this.errorMsg.set(formatError(e));
+      this.errorMsg.set(formatBackendError(e, CATEGORY_ERROR_OVERRIDES));
     } finally {
       this.busy.set(false);
     }
   }
-}
-
-function formatError(e: unknown): string {
-  if (isBackendError(e)) {
-    if (e.kind === 'validation') return e.message.replace(/^validation:\s*/, '');
-    if (e.kind === 'entry_not_found') return 'Category not found.';
-    return e.message;
-  }
-  return e instanceof Error ? e.message : String(e);
 }

@@ -5,7 +5,7 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Category } from '../../core/models/category.model';
 import { CategoryService } from '../../core/services/category.service';
 import { PasswordEntryService } from '../../core/services/password-entry.service';
-import { isBackendError } from '../../core/services/tauri-invoke';
+import { formatBackendError } from '../../core/services/tauri-invoke';
 import { PasswordGeneratorPanelComponent } from '../password-generator/password-generator-panel.component';
 
 @Component({
@@ -217,7 +217,7 @@ export class EntryFormComponent implements OnInit {
         this.categoryId = full.categoryId;
       }
     } catch (e) {
-      this.errorMsg.set(formatError(e));
+      this.errorMsg.set(formatBackendError(e));
     } finally {
       this.loading.set(false);
     }
@@ -261,19 +261,9 @@ export class EntryFormComponent implements OnInit {
         await this.router.navigate(['/vault', newId]);
       }
     } catch (e) {
-      this.errorMsg.set(formatError(e));
+      this.errorMsg.set(formatBackendError(e));
     } finally {
       this.busy.set(false);
     }
   }
-}
-
-function formatError(e: unknown): string {
-  if (isBackendError(e)) {
-    if (e.kind === 'validation') return e.message.replace(/^validation:\s*/, '');
-    if (e.kind === 'locked') return 'Vault is locked.';
-    if (e.kind === 'entry_not_found') return 'Entry not found.';
-    return e.message;
-  }
-  return e instanceof Error ? e.message : String(e);
 }

@@ -20,3 +20,26 @@ export async function call<T>(
 ): Promise<T> {
   return invoke<T>(command, args);
 }
+
+export type BackendErrorOverrides = Partial<Record<string, string>>;
+
+const VALIDATION_PREFIX = /^validation:\s*/;
+
+const DEFAULT_MESSAGES: Record<string, string> = {
+  locked: 'Vault is locked.',
+  wrong_password: 'Incorrect master password.',
+  entry_not_found: 'Entry not found.',
+};
+
+export function formatBackendError(
+  e: unknown,
+  overrides?: BackendErrorOverrides,
+): string {
+  if (isBackendError(e)) {
+    const override = overrides?.[e.kind];
+    if (override !== undefined) return override;
+    if (e.kind === 'validation') return e.message.replace(VALIDATION_PREFIX, '');
+    return DEFAULT_MESSAGES[e.kind] ?? e.message;
+  }
+  return e instanceof Error ? e.message : String(e);
+}

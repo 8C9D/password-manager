@@ -2,7 +2,7 @@ import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 
-import { isBackendError } from '../../core/services/tauri-invoke';
+import { formatBackendError } from '../../core/services/tauri-invoke';
 import { VaultService } from '../../core/services/vault.service';
 
 type Mode = 'unknown' | 'create' | 'unlock';
@@ -182,7 +182,7 @@ export class VaultUnlockComponent {
       }
       this.mode.set(status.exists ? 'unlock' : 'create');
     } catch (e) {
-      this.errorMsg.set(formatError(e));
+      this.errorMsg.set(formatBackendError(e));
     }
   }
 
@@ -200,7 +200,7 @@ export class VaultUnlockComponent {
       this.pw2 = '';
       await this.router.navigate(['/vault']);
     } catch (e) {
-      this.errorMsg.set(formatError(e));
+      this.errorMsg.set(formatBackendError(e));
     } finally {
       this.busy.set(false);
     }
@@ -215,18 +215,9 @@ export class VaultUnlockComponent {
       this.pw1 = '';
       await this.router.navigate(['/vault']);
     } catch (e) {
-      this.errorMsg.set(formatError(e));
+      this.errorMsg.set(formatBackendError(e));
     } finally {
       this.busy.set(false);
     }
   }
-}
-
-function formatError(e: unknown): string {
-  if (isBackendError(e)) {
-    if (e.kind === 'wrong_password') return 'Incorrect master password.';
-    if (e.kind === 'validation') return e.message.replace(/^validation:\s*/, '');
-    return e.message;
-  }
-  return e instanceof Error ? e.message : String(e);
 }

@@ -7,7 +7,7 @@ import { CategoryService } from '../../core/services/category.service';
 import { ClipboardService } from '../../core/services/clipboard.service';
 import { ConfirmService } from '../../core/services/confirm.service';
 import { PasswordEntryService } from '../../core/services/password-entry.service';
-import { isBackendError } from '../../core/services/tauri-invoke';
+import { formatBackendError } from '../../core/services/tauri-invoke';
 
 @Component({
   selector: 'app-entry-detail',
@@ -198,7 +198,7 @@ export class EntryDetailComponent {
       const e = await this.entries.get(id);
       this.entry.set(e);
     } catch (err) {
-      this.error.set(formatError(err));
+      this.error.set(formatBackendError(err));
     } finally {
       this.loading.set(false);
     }
@@ -236,16 +236,7 @@ export class EntryDetailComponent {
       await this.entries.remove(id);
       await this.router.navigate(['/vault']);
     } catch (e) {
-      this.error.set(formatError(e));
+      this.error.set(formatBackendError(e));
     }
   }
-}
-
-function formatError(e: unknown): string {
-  if (isBackendError(e)) {
-    if (e.kind === 'entry_not_found') return 'Entry not found.';
-    if (e.kind === 'locked') return 'Vault is locked.';
-    return e.message;
-  }
-  return e instanceof Error ? e.message : String(e);
 }
