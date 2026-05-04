@@ -55,6 +55,19 @@ fn validate_input(input: &EntryInput) -> Result<(), AppError> {
     Ok(())
 }
 
+fn encrypt_optional(
+    key: &[u8; 32],
+    plaintext: Option<&str>,
+) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>), AppError> {
+    match plaintext {
+        Some(s) if !s.is_empty() => {
+            let ct = crypto::encrypt(key, s.as_bytes())?;
+            Ok((Some(ct.bytes), Some(ct.nonce.to_vec())))
+        }
+        _ => Ok((None, None)),
+    }
+}
+
 #[tauri::command]
 pub fn create_entry(
     state: State<'_, AppState>,
@@ -64,13 +77,7 @@ pub fn create_entry(
 
     with_unlocked(&state, |s, key| {
         let pw_ct = crypto::encrypt(key, input.password.as_bytes())?;
-        let (notes_bytes, notes_nonce) = match input.notes.as_deref() {
-            Some(n) if !n.is_empty() => {
-                let ct = crypto::encrypt(key, n.as_bytes())?;
-                (Some(ct.bytes), Some(ct.nonce.to_vec()))
-            }
-            _ => (None, None),
-        };
+        let (notes_bytes, notes_nonce) = encrypt_optional(key, input.notes.as_deref())?;
         let now = now_iso8601();
         s.conn.execute(
             "INSERT INTO password_entries
@@ -230,13 +237,7 @@ pub fn update_entry(
 
     with_unlocked(&state, |s, key| {
         let pw_ct = crypto::encrypt(key, input.password.as_bytes())?;
-        let (notes_bytes, notes_nonce) = match input.notes.as_deref() {
-            Some(n) if !n.is_empty() => {
-                let ct = crypto::encrypt(key, n.as_bytes())?;
-                (Some(ct.bytes), Some(ct.nonce.to_vec()))
-            }
-            _ => (None, None),
-        };
+        let (notes_bytes, notes_nonce) = encrypt_optional(key, input.notes.as_deref())?;
         let now = now_iso8601();
         let n = s.conn.execute(
             "UPDATE password_entries SET
@@ -282,4 +283,41 @@ pub fn delete_entry(state: State<'_, AppState>, id: i64) -> Result<(), AppError>
         }
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixed_key() -> [u8; 32] {
+        let mut k = [0u8; 32];
+        for (i, b) in k.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        k
+    }
+
+    #[test]
+    fn encrypt_optional_returns_none_for_none() {
+        let (bytes, nonce) = encrypt_optional(&fixed_key(), None).unwrap();
+        assert!(bytes.is_none());
+        assert!(nonce.is_none());
+    }
+
+    #[test]
+    fn encrypt_optional_returns_none_for_empty_string() {
+        let (bytes, nonce) = encrypt_optional(&fixed_key(), Some("")).unwrap();
+        assert!(bytes.is_none());
+        assert!(nonce.is_none());
+    }
+
+    #[test]
+    fn encrypt_optional_round_trips_non_empty_value() {
+        let key = fixed_key();
+        let (bytes, nonce) = encrypt_optional(&key, Some("secret note")).unwrap();
+        let ct = bytes.expect("ciphertext present");
+        let n = nonce.expect("nonce present");
+        let recovered = crypto::decrypt(&key, &ct, &n).unwrap();
+        assert_eq!(recovered, b"secret note");
+    }
 }
