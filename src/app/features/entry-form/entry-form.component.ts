@@ -4,7 +4,10 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 
 import { Category } from '../../core/models/category.model';
 import { CategoryService } from '../../core/services/category.service';
-import { PasswordEntryService } from '../../core/services/password-entry.service';
+import {
+  PasswordEntryService,
+  validateEntryInput,
+} from '../../core/services/password-entry.service';
 import { formatBackendError } from '../../core/services/tauri-invoke';
 import { PasswordGeneratorPanelComponent } from '../password-generator/password-generator-panel.component';
 
@@ -240,7 +243,8 @@ export class EntryFormComponent implements OnInit {
   protected async onSubmit(): Promise<void> {
     this.titleTouched.set(true);
     this.passwordTouched.set(true);
-    if (this.title.trim() === '' || this.password === '' || this.busy()) return;
+    const validation = validateEntryInput({ title: this.title, password: this.password });
+    if (!validation.valid || this.busy()) return;
     this.busy.set(true);
     this.errorMsg.set(null);
     try {
