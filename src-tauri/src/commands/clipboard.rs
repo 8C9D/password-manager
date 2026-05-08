@@ -14,7 +14,7 @@ pub fn copy_to_clipboard(
     state: State<'_, AppState>,
     value: String,
     clear_after_secs: Option<u64>,
-) -> Result<(), AppError> {
+) -> Result<u64, AppError> {
     let secs = clear_after_secs.unwrap_or(DEFAULT_CLEAR_SECS).clamp(1, 600);
 
     app.clipboard()
@@ -57,5 +57,5 @@ pub fn copy_to_clipboard(
         }
     });
 
-    Ok(())
+    Ok(secs)
 }

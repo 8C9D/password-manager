@@ -37,7 +37,7 @@ import { EntryListComponent } from '../entry-list/entry-list.component';
       </header>
       @if (clipboard.lastCopiedLabel(); as label) {
         <div class="clipboard-banner">
-          Copied {{ label }} — auto-clears in {{ clipboard.clearAfterSecs }}s.
+          Copied {{ label }} — auto-clears in {{ clipboard.clearAfterSecs() }}s.
         </div>
       }
       <div class="cols">
