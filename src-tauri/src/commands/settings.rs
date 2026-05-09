@@ -15,12 +15,6 @@ pub struct Settings {
     pub auto_lock_secs: u64,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SettingsInput {
-    pub auto_lock_secs: u64,
-}
-
 fn read_secs(conn: &rusqlite::Connection) -> Result<u64, AppError> {
     let raw: Option<String> = conn
         .query_row(
@@ -45,7 +39,7 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<Settings, AppError> {
 #[tauri::command]
 pub fn update_settings(
     state: State<'_, AppState>,
-    input: SettingsInput,
+    input: Settings,
 ) -> Result<Settings, AppError> {
     if input.auto_lock_secs < MIN_AUTO_LOCK_SECS || input.auto_lock_secs > MAX_AUTO_LOCK_SECS {
         return Err(AppError::Validation(
