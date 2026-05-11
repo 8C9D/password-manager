@@ -14,8 +14,27 @@ export function isBackendError(value: unknown): value is BackendError {
   );
 }
 
+export type TauriCommand =
+  | 'vault_status'
+  | 'create_vault'
+  | 'unlock_vault'
+  | 'lock_vault'
+  | 'create_entry'
+  | 'list_entries'
+  | 'get_entry'
+  | 'update_entry'
+  | 'delete_entry'
+  | 'list_categories'
+  | 'create_category'
+  | 'update_category'
+  | 'delete_category'
+  | 'generate_password'
+  | 'get_settings'
+  | 'update_settings'
+  | 'copy_to_clipboard';
+
 export async function call<T>(
-  command: string,
+  command: TauriCommand,
   args?: Record<string, unknown>,
 ): Promise<T> {
   return invoke<T>(command, args);
