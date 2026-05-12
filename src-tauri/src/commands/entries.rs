@@ -4,7 +4,7 @@ use tauri::State;
 use crate::crypto;
 use crate::db::now_iso8601;
 use crate::error::AppError;
-use crate::state::{with_state, with_unlocked, AppState};
+use crate::state::{with_authorized, with_unlocked, AppState};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,10 +104,7 @@ pub fn create_entry(
 
 #[tauri::command]
 pub fn list_entries(state: State<'_, AppState>) -> Result<Vec<EntrySummary>, AppError> {
-    with_state(&state, |s| {
-        if s.key.is_none() {
-            return Err(AppError::Locked);
-        }
+    with_authorized(&state, |s| {
         let mut stmt = s.conn.prepare(
             "SELECT id, category_id, title, username, url_or_app_name,
                     created_at, updated_at, last_used_at

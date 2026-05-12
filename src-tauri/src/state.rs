@@ -52,3 +52,17 @@ pub fn with_state<R>(
         .map_err(|_| AppError::Internal("state lock poisoned".into()))?;
     f(&mut guard)
 }
+
+pub fn with_authorized<R>(
+    state: &AppState,
+    f: impl FnOnce(&mut AppStateInner) -> Result<R, AppError>,
+) -> Result<R, AppError> {
+    let mut guard = state
+        .inner
+        .lock()
+        .map_err(|_| AppError::Internal("state lock poisoned".into()))?;
+    if guard.key.is_none() {
+        return Err(AppError::Locked);
+    }
+    f(&mut guard)
+}

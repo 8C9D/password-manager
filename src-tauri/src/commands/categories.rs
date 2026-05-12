@@ -3,7 +3,7 @@ use tauri::State;
 
 use crate::db::now_iso8601;
 use crate::error::AppError;
-use crate::state::{with_state, AppState};
+use crate::state::{with_authorized, AppState};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,10 +27,7 @@ fn validate_name(name: &str) -> Result<String, AppError> {
 
 #[tauri::command]
 pub fn list_categories(state: State<'_, AppState>) -> Result<Vec<Category>, AppError> {
-    with_state(&state, |s| {
-        if s.key.is_none() {
-            return Err(AppError::Locked);
-        }
+    with_authorized(&state, |s| {
         let mut stmt = s.conn.prepare(
             "SELECT id, name, created_at, updated_at
              FROM categories ORDER BY name COLLATE NOCASE ASC",
@@ -52,10 +49,7 @@ pub fn list_categories(state: State<'_, AppState>) -> Result<Vec<Category>, AppE
 #[tauri::command]
 pub fn create_category(state: State<'_, AppState>, name: String) -> Result<i64, AppError> {
     let trimmed = validate_name(&name)?;
-    with_state(&state, |s| {
-        if s.key.is_none() {
-            return Err(AppError::Locked);
-        }
+    with_authorized(&state, |s| {
         let now = now_iso8601();
         match s.conn.execute(
             "INSERT INTO categories (name, created_at, updated_at) VALUES (?1, ?2, ?2)",
@@ -79,10 +73,7 @@ pub fn update_category(
     name: String,
 ) -> Result<(), AppError> {
     let trimmed = validate_name(&name)?;
-    with_state(&state, |s| {
-        if s.key.is_none() {
-            return Err(AppError::Locked);
-        }
+    with_authorized(&state, |s| {
         let now = now_iso8601();
         let result = s.conn.execute(
             "UPDATE categories SET name = ?1, updated_at = ?2 WHERE id = ?3",
@@ -103,10 +94,7 @@ pub fn update_category(
 
 #[tauri::command]
 pub fn delete_category(state: State<'_, AppState>, id: i64) -> Result<(), AppError> {
-    with_state(&state, |s| {
-        if s.key.is_none() {
-            return Err(AppError::Locked);
-        }
+    with_authorized(&state, |s| {
         let n = s
             .conn
             .execute("DELETE FROM categories WHERE id = ?1", rusqlite::params![id])?;

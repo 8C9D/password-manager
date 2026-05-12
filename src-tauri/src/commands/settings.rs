@@ -3,7 +3,7 @@ use tauri::State;
 
 use crate::db::now_iso8601;
 use crate::error::AppError;
-use crate::state::{with_state, AppState};
+use crate::state::{with_authorized, with_state, AppState};
 
 const DEFAULT_AUTO_LOCK_SECS: u64 = 300;
 const MIN_AUTO_LOCK_SECS: u64 = 30;
@@ -46,10 +46,7 @@ pub fn update_settings(
             "auto-lock timeout must be between 30 seconds and 24 hours",
         ));
     }
-    with_state(&state, |s| {
-        if s.key.is_none() {
-            return Err(AppError::Locked);
-        }
+    with_authorized(&state, |s| {
         let now = now_iso8601();
         s.conn.execute(
             "INSERT INTO settings (key, value, updated_at) VALUES ('auto_lock_secs', ?1, ?2)
