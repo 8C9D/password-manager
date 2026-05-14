@@ -129,23 +129,26 @@ pub fn list_entries(state: State<'_, AppState>) -> Result<Vec<EntrySummary>, App
     })
 }
 
+struct EntryRow {
+    id: i64,
+    category_id: Option<i64>,
+    title: String,
+    username: String,
+    url_or_app_name: String,
+    encrypted_password: Vec<u8>,
+    password_nonce: Vec<u8>,
+    encrypted_notes: Option<Vec<u8>>,
+    notes_nonce: Option<Vec<u8>>,
+    created_at: String,
+    updated_at: String,
+    #[allow(dead_code)]
+    last_used_at: Option<String>,
+}
+
 #[tauri::command]
 pub fn get_entry(state: State<'_, AppState>, id: i64) -> Result<EntryFull, AppError> {
     with_unlocked(&state, |s, key| {
-        let row: Option<(
-            i64,
-            Option<i64>,
-            String,
-            String,
-            String,
-            Vec<u8>,
-            Vec<u8>,
-            Option<Vec<u8>>,
-            Option<Vec<u8>>,
-            String,
-            String,
-            Option<String>,
-        )> = s
+        let row: Option<EntryRow> = s
             .conn
             .query_row(
                 "SELECT id, category_id, title, username, url_or_app_name,
@@ -155,44 +158,31 @@ pub fn get_entry(state: State<'_, AppState>, id: i64) -> Result<EntryFull, AppEr
                  FROM password_entries WHERE id = ?1",
                 [id],
                 |r| {
-                    Ok((
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                        r.get(5)?,
-                        r.get(6)?,
-                        r.get(7)?,
-                        r.get(8)?,
-                        r.get(9)?,
-                        r.get(10)?,
-                        r.get(11)?,
-                    ))
+                    Ok(EntryRow {
+                        id: r.get(0)?,
+                        category_id: r.get(1)?,
+                        title: r.get(2)?,
+                        username: r.get(3)?,
+                        url_or_app_name: r.get(4)?,
+                        encrypted_password: r.get(5)?,
+                        password_nonce: r.get(6)?,
+                        encrypted_notes: r.get(7)?,
+                        notes_nonce: r.get(8)?,
+                        created_at: r.get(9)?,
+                        updated_at: r.get(10)?,
+                        last_used_at: r.get(11)?,
+                    })
                 },
             )
             .ok();
 
-        let (
-            id,
-            category_id,
-            title,
-            username,
-            url_or_app_name,
-            enc_pw,
-            pw_nonce,
-            enc_notes,
-            notes_nonce,
-            created_at,
-            updated_at,
-            _last_used_at,
-        ) = row.ok_or(AppError::EntryNotFound)?;
+        let row = row.ok_or(AppError::EntryNotFound)?;
 
-        let password_bytes = crypto::decrypt(key, &enc_pw, &pw_nonce)?;
+        let password_bytes = crypto::decrypt(key, &row.encrypted_password, &row.password_nonce)?;
         let password = String::from_utf8(password_bytes)
             .map_err(|_| AppError::Crypto("password is not valid utf-8"))?;
 
-        let notes = match (enc_notes, notes_nonce) {
+        let notes = match (row.encrypted_notes, row.notes_nonce) {
             (Some(c), Some(n)) => {
                 let pt = crypto::decrypt(key, &c, &n)?;
                 Some(
@@ -206,19 +196,19 @@ pub fn get_entry(state: State<'_, AppState>, id: i64) -> Result<EntryFull, AppEr
         let now = now_iso8601();
         s.conn.execute(
             "UPDATE password_entries SET last_used_at = ?1 WHERE id = ?2",
-            rusqlite::params![now, id],
+            rusqlite::params![now, row.id],
         )?;
 
         Ok(EntryFull {
-            id,
-            category_id,
-            title,
-            username,
-            url_or_app_name,
+            id: row.id,
+            category_id: row.category_id,
+            title: row.title,
+            username: row.username,
+            url_or_app_name: row.url_or_app_name,
             password,
             notes,
-            created_at,
-            updated_at,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
             last_used_at: Some(now),
         })
     })
