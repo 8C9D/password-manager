@@ -37,6 +37,15 @@ describe('formatBackendError', () => {
     ).toBe('Entry not found.');
   });
 
+  it('maps category_not_found to "Category not found." by default', () => {
+    expect(
+      formatBackendError({
+        kind: 'category_not_found',
+        message: 'category not found',
+      }),
+    ).toBe('Category not found.');
+  });
+
   it('falls back to the backend message for unknown kinds', () => {
     expect(
       formatBackendError({ kind: 'something_else', message: 'boom' }),

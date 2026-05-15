@@ -48,6 +48,7 @@ const DEFAULT_MESSAGES: Record<string, string> = {
   locked: 'Vault is locked.',
   wrong_password: 'Incorrect master password.',
   entry_not_found: 'Entry not found.',
+  category_not_found: 'Category not found.',
 };
 
 export function formatBackendError(

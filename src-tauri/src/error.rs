@@ -18,6 +18,9 @@ pub enum AppError {
     #[error("entry not found")]
     EntryNotFound,
 
+    #[error("category not found")]
+    CategoryNotFound,
+
     #[error("validation: {0}")]
     Validation(&'static str),
 
@@ -50,6 +53,7 @@ impl Serialize for AppError {
             AppError::VaultNotFound => "vault_not_found",
             AppError::WrongPassword => "wrong_password",
             AppError::EntryNotFound => "entry_not_found",
+            AppError::CategoryNotFound => "category_not_found",
             AppError::Validation(_) => "validation",
             AppError::Crypto(_) => "crypto",
             AppError::Database(_) => "database",

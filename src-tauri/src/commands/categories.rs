@@ -80,7 +80,7 @@ pub fn update_category(
             rusqlite::params![trimmed, now, id],
         );
         match result {
-            Ok(0) => Err(AppError::EntryNotFound),
+            Ok(0) => Err(AppError::CategoryNotFound),
             Ok(_) => Ok(()),
             Err(rusqlite::Error::SqliteFailure(e, _))
                 if e.code == rusqlite::ErrorCode::ConstraintViolation =>
@@ -99,7 +99,7 @@ pub fn delete_category(state: State<'_, AppState>, id: i64) -> Result<(), AppErr
             .conn
             .execute("DELETE FROM categories WHERE id = ?1", rusqlite::params![id])?;
         if n == 0 {
-            return Err(AppError::EntryNotFound);
+            return Err(AppError::CategoryNotFound);
         }
         Ok(())
     })

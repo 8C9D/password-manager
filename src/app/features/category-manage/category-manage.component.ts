@@ -7,8 +7,6 @@ import { CategoryService } from '../../core/services/category.service';
 import { ConfirmService } from '../../core/services/confirm.service';
 import { formatBackendError } from '../../core/services/tauri-invoke';
 
-const CATEGORY_ERROR_OVERRIDES = { entry_not_found: 'Category not found.' };
-
 @Component({
   selector: 'app-category-manage',
   standalone: true,
@@ -150,7 +148,7 @@ export class CategoryManageComponent implements OnInit {
     try {
       await this.categories.list();
     } catch (e) {
-      this.errorMsg.set(formatBackendError(e, CATEGORY_ERROR_OVERRIDES));
+      this.errorMsg.set(formatBackendError(e));
     }
   }
 
@@ -162,7 +160,7 @@ export class CategoryManageComponent implements OnInit {
       await this.categories.create(this.newName.trim());
       this.newName = '';
     } catch (e) {
-      this.errorMsg.set(formatBackendError(e, CATEGORY_ERROR_OVERRIDES));
+      this.errorMsg.set(formatBackendError(e));
     } finally {
       this.busy.set(false);
     }
@@ -187,7 +185,7 @@ export class CategoryManageComponent implements OnInit {
       await this.categories.rename(id, this.editingName.trim());
       this.cancelEdit();
     } catch (e) {
-      this.errorMsg.set(formatBackendError(e, CATEGORY_ERROR_OVERRIDES));
+      this.errorMsg.set(formatBackendError(e));
     } finally {
       this.busy.set(false);
     }
@@ -206,7 +204,7 @@ export class CategoryManageComponent implements OnInit {
     try {
       await this.categories.remove(c.id);
     } catch (e) {
-      this.errorMsg.set(formatBackendError(e, CATEGORY_ERROR_OVERRIDES));
+      this.errorMsg.set(formatBackendError(e));
     } finally {
       this.busy.set(false);
     }
