@@ -1,0 +1,81 @@
+<div class="form-shell">
+  <header class="form-head">
+    <h2>{{ isEdit() ? 'Edit entry' : 'New entry' }}</h2>
+    <a [routerLink]="cancelLink()" class="btn small">Cancel</a>
+  </header>
+
+  @if (loading()) {
+    <p class="muted">Loading…</p>
+  } @else {
+    <form (ngSubmit)="onSubmit()" class="form">
+      <label>
+        Title<span class="req">*</span>
+        <input type="text" name="title" [(ngModel)]="title" required autofocus />
+      </label>
+      @if (titleTouched() && title.trim() === '') {
+        <p class="warn">Title is required.</p>
+      }
+
+      <label>
+        Category
+        <select name="categoryId" [(ngModel)]="categoryId">
+          <option [ngValue]="null">(uncategorized)</option>
+          @for (c of categories(); track c.id) {
+            <option [ngValue]="c.id">{{ c.name }}</option>
+          }
+        </select>
+      </label>
+
+      <label>
+        Username / email
+        <input type="text" name="username" [(ngModel)]="username" autocomplete="off" />
+      </label>
+
+      <label>
+        URL or app name
+        <input type="text" name="urlOrAppName" [(ngModel)]="urlOrAppName" autocomplete="off" />
+      </label>
+
+      <label>
+        Password<span class="req">*</span>
+        <div class="pw-row">
+          <input
+            [type]="showPassword() ? 'text' : 'password'"
+            name="password"
+            [(ngModel)]="password"
+            autocomplete="new-password"
+            required
+          />
+          <button type="button" class="btn small" (click)="toggleShow()">
+            {{ showPassword() ? 'Hide' : 'Show' }}
+          </button>
+          <button type="button" class="btn small" (click)="toggleGenerator()">
+            {{ showGenerator() ? 'Hide generator' : 'Generate' }}
+          </button>
+        </div>
+      </label>
+      @if (passwordTouched() && password === '') {
+        <p class="warn">Password is required.</p>
+      }
+      @if (showGenerator()) {
+        <app-password-generator-panel (accept)="onGenerated($event)" />
+      }
+
+      <label>
+        Notes
+        <textarea name="notes" [(ngModel)]="notes" rows="4"></textarea>
+      </label>
+
+      @if (errorMsg()) {
+        <p class="warn">{{ errorMsg() }}</p>
+      }
+
+      <div class="actions">
+        <a [routerLink]="cancelLink()" class="btn">Cancel</a>
+        <button type="submit" class="btn primary" [disabled]="busy()">
+          {{ busy() ? 'Saving…' : (isEdit() ? 'Save changes' : 'Save entry') }}
+        </button>
+      </div>
+    </form>
+  }
+</div>
