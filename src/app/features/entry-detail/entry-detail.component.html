@@ -1,0 +1,63 @@
+<div class="detail">
+  @if (loading()) {
+    <p class="muted">Loading…</p>
+  } @else if (error()) {
+    <p class="warn">{{ error() }}</p>
+  } @else if (entry(); as e) {
+    <header class="header">
+      <h2>{{ e.title }}</h2>
+      <div class="header-actions">
+        <a [routerLink]="['/vault', e.id, 'edit']" class="btn small">Edit</a>
+        <button type="button" class="btn small danger" (click)="onDelete(e.id, e.title)">
+          Delete
+        </button>
+      </div>
+    </header>
+
+    <dl>
+      @if (categoryName(); as cat) {
+        <dt>Category</dt>
+        <dd><span class="value">{{ cat }}</span></dd>
+      }
+
+      <dt>Username</dt>
+      <dd>
+        <span class="value">{{ e.username || '—' }}</span>
+        @if (e.username) {
+          <button class="btn small" type="button" (click)="copy(e.username, 'username')">Copy</button>
+        }
+      </dd>
+
+      <dt>URL / App</dt>
+      <dd>
+        <span class="value">{{ e.urlOrAppName || '—' }}</span>
+      </dd>
+
+      <dt>Password</dt>
+      <dd>
+        <span class="value mono">
+          {{ showPassword() ? e.password : mask(e.password) }}
+        </span>
+        <button class="btn small" type="button" (click)="toggleShow()">
+          {{ showPassword() ? 'Hide' : 'Show' }}
+        </button>
+        <button class="btn small primary" type="button" (click)="copy(e.password, 'password')">
+          Copy
+        </button>
+      </dd>
+
+      @if (e.notes) {
+        <dt>Notes</dt>
+        <dd>
+          <pre class="notes">{{ e.notes }}</pre>
+        </dd>
+      }
+
+      <dt>Created</dt>
+      <dd><span class="value muted">{{ formatDate(e.createdAt) }}</span></dd>
+
+      <dt>Last viewed</dt>
+      <dd><span class="value muted">{{ e.lastUsedAt ? formatDate(e.lastUsedAt) : 'just now' }}</span></dd>
+    </dl>
+  }
+</div>
