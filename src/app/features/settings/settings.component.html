@@ -1,0 +1,51 @@
+<div class="shell">
+  <header class="head">
+    <h2>Settings</h2>
+    <a routerLink="/vault" class="btn small">Back</a>
+  </header>
+
+  @if (loading()) {
+    <p class="muted">Loading…</p>
+  } @else {
+    <section class="section">
+      <h3>Auto-lock</h3>
+      <p class="muted small">
+        Vault will lock automatically after this many seconds of inactivity. Minimum 30 seconds.
+      </p>
+      <div class="presets">
+        @for (p of presets; track p.secs) {
+          <button
+            type="button"
+            class="btn small"
+            [class.primary]="autoLockSecs === p.secs"
+            (click)="autoLockSecs = p.secs"
+          >
+            {{ p.label }}
+          </button>
+        }
+      </div>
+      <label class="custom">
+        Custom (seconds)
+        <input
+          type="number"
+          [(ngModel)]="autoLockSecs"
+          min="30"
+          max="86400"
+          name="autoLockSecs"
+        />
+      </label>
+
+      @if (errorMsg()) {
+        <p class="warn">{{ errorMsg() }}</p>
+      }
+      @if (savedMsg()) {
+        <p class="ok">{{ savedMsg() }}</p>
+      }
+      <div class="actions">
+        <button type="button" class="btn primary" [disabled]="busy()" (click)="onSave()">
+          {{ busy() ? 'Saving…' : 'Save' }}
+        </button>
+      </div>
+    </section>
+  }
+</div>
