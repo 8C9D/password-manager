@@ -66,3 +66,75 @@ pub fn with_authorized<R>(
     }
     f(&mut guard)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use zeroize::Zeroizing;
+
+    fn locked_state() -> AppState {
+        AppState::new(db::open_in_memory().unwrap())
+    }
+
+    fn unlocked_state() -> AppState {
+        let state = locked_state();
+        state.inner.lock().unwrap().key = Some(Zeroizing::new([0u8; 32]));
+        state
+    }
+
+    #[test]
+    fn with_state_runs_closure_when_locked() {
+        let state = locked_state();
+        let result: Result<i32, AppError> = with_state(&state, |s| {
+            assert!(s.key.is_none());
+            Ok(7)
+        });
+        assert_eq!(result.unwrap(), 7);
+    }
+
+    #[test]
+    fn with_state_runs_closure_when_unlocked() {
+        let state = unlocked_state();
+        let result: Result<i32, AppError> = with_state(&state, |s| {
+            assert!(s.key.is_some());
+            Ok(7)
+        });
+        assert_eq!(result.unwrap(), 7);
+    }
+
+    #[test]
+    fn with_authorized_rejects_when_locked() {
+        let state = locked_state();
+        let result: Result<(), AppError> = with_authorized(&state, |_| {
+            panic!("closure must not run when locked");
+        });
+        assert!(matches!(result, Err(AppError::Locked)));
+    }
+
+    #[test]
+    fn with_authorized_runs_closure_when_unlocked() {
+        let state = unlocked_state();
+        let result: Result<i32, AppError> = with_authorized(&state, |s| {
+            assert!(s.key.is_some());
+            Ok(42)
+        });
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn with_unlocked_rejects_when_locked() {
+        let state = locked_state();
+        let result: Result<(), AppError> = with_unlocked(&state, |_, _| {
+            panic!("closure must not run when locked");
+        });
+        assert!(matches!(result, Err(AppError::Locked)));
+    }
+
+    #[test]
+    fn with_unlocked_exposes_key_when_unlocked() {
+        let state = unlocked_state();
+        let result: Result<[u8; 32], AppError> = with_unlocked(&state, |_, key| Ok(*key));
+        assert_eq!(result.unwrap(), [0u8; 32]);
+    }
+}
