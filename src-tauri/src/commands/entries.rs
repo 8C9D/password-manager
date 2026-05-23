@@ -68,14 +68,10 @@ fn encrypt_optional(
     }
 }
 
-#[tauri::command]
-pub fn create_entry(
-    state: State<'_, AppState>,
-    input: EntryInput,
-) -> Result<i64, AppError> {
+fn create_entry_impl(state: &AppState, input: EntryInput) -> Result<i64, AppError> {
     validate_input(&input)?;
 
-    with_unlocked(&state, |s, key| {
+    with_unlocked(state, |s, key| {
         let pw_ct = crypto::encrypt(key, input.password.as_bytes())?;
         let (notes_bytes, notes_nonce) = encrypt_optional(key, input.notes.as_deref())?;
         let now = now_iso8601();
@@ -102,9 +98,8 @@ pub fn create_entry(
     })
 }
 
-#[tauri::command]
-pub fn list_entries(state: State<'_, AppState>) -> Result<Vec<EntrySummary>, AppError> {
-    with_authorized(&state, |s| {
+fn list_entries_impl(state: &AppState) -> Result<Vec<EntrySummary>, AppError> {
+    with_authorized(state, |s| {
         let mut stmt = s.conn.prepare(
             "SELECT id, category_id, title, username, url_or_app_name,
                     created_at, updated_at, last_used_at
@@ -129,6 +124,19 @@ pub fn list_entries(state: State<'_, AppState>) -> Result<Vec<EntrySummary>, App
     })
 }
 
+#[tauri::command]
+pub fn create_entry(
+    state: State<'_, AppState>,
+    input: EntryInput,
+) -> Result<i64, AppError> {
+    create_entry_impl(&state, input)
+}
+
+#[tauri::command]
+pub fn list_entries(state: State<'_, AppState>) -> Result<Vec<EntrySummary>, AppError> {
+    list_entries_impl(&state)
+}
+
 struct EntryRow {
     id: i64,
     category_id: Option<i64>,
@@ -145,9 +153,8 @@ struct EntryRow {
     last_used_at: Option<String>,
 }
 
-#[tauri::command]
-pub fn get_entry(state: State<'_, AppState>, id: i64) -> Result<EntryFull, AppError> {
-    with_unlocked(&state, |s, key| {
+fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
+    with_unlocked(state, |s, key| {
         let row: Option<EntryRow> = s
             .conn
             .query_row(
@@ -214,15 +221,10 @@ pub fn get_entry(state: State<'_, AppState>, id: i64) -> Result<EntryFull, AppEr
     })
 }
 
-#[tauri::command]
-pub fn update_entry(
-    state: State<'_, AppState>,
-    id: i64,
-    input: EntryInput,
-) -> Result<(), AppError> {
+fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(), AppError> {
     validate_input(&input)?;
 
-    with_unlocked(&state, |s, key| {
+    with_unlocked(state, |s, key| {
         let pw_ct = crypto::encrypt(key, input.password.as_bytes())?;
         let (notes_bytes, notes_nonce) = encrypt_optional(key, input.notes.as_deref())?;
         let now = now_iso8601();
@@ -258,9 +260,8 @@ pub fn update_entry(
     })
 }
 
-#[tauri::command]
-pub fn delete_entry(state: State<'_, AppState>, id: i64) -> Result<(), AppError> {
-    with_unlocked(&state, |s, _key| {
+fn delete_entry_impl(state: &AppState, id: i64) -> Result<(), AppError> {
+    with_unlocked(state, |s, _key| {
         let n = s.conn.execute(
             "DELETE FROM password_entries WHERE id = ?1",
             rusqlite::params![id],
@@ -272,9 +273,30 @@ pub fn delete_entry(state: State<'_, AppState>, id: i64) -> Result<(), AppError>
     })
 }
 
+#[tauri::command]
+pub fn get_entry(state: State<'_, AppState>, id: i64) -> Result<EntryFull, AppError> {
+    get_entry_impl(&state, id)
+}
+
+#[tauri::command]
+pub fn update_entry(
+    state: State<'_, AppState>,
+    id: i64,
+    input: EntryInput,
+) -> Result<(), AppError> {
+    update_entry_impl(&state, id, input)
+}
+
+#[tauri::command]
+pub fn delete_entry(state: State<'_, AppState>, id: i64) -> Result<(), AppError> {
+    delete_entry_impl(&state, id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db;
+    use zeroize::Zeroizing;
 
     fn fixed_key() -> [u8; 32] {
         let mut k = [0u8; 32];
@@ -282,6 +304,27 @@ mod tests {
             *b = i as u8;
         }
         k
+    }
+
+    fn locked_state() -> AppState {
+        AppState::new(db::open_in_memory().unwrap())
+    }
+
+    fn unlocked_state() -> AppState {
+        let state = locked_state();
+        state.inner.lock().unwrap().key = Some(Zeroizing::new(fixed_key()));
+        state
+    }
+
+    fn sample_input() -> EntryInput {
+        EntryInput {
+            category_id: None,
+            title: "GitHub".into(),
+            username: "alice".into(),
+            url_or_app_name: "github.com".into(),
+            password: "hunter2".into(),
+            notes: Some("the cake is a lie".into()),
+        }
     }
 
     #[test]
@@ -306,5 +349,194 @@ mod tests {
         let n = nonce.expect("nonce present");
         let recovered = crypto::decrypt(&key, &ct, &n).unwrap();
         assert_eq!(recovered, b"secret note");
+    }
+
+    #[test]
+    fn create_then_list_returns_summary() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        let list = list_entries_impl(&state).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, id);
+        assert_eq!(list[0].title, "GitHub");
+        assert_eq!(list[0].username, "alice");
+        assert_eq!(list[0].url_or_app_name, "github.com");
+        assert!(list[0].last_used_at.is_none());
+    }
+
+    #[test]
+    fn list_sorts_case_insensitively() {
+        let state = unlocked_state();
+        for title in ["banana", "Apple", "cherry"] {
+            create_entry_impl(
+                &state,
+                EntryInput {
+                    title: title.into(),
+                    ..sample_input()
+                },
+            )
+            .unwrap();
+        }
+        let titles: Vec<_> = list_entries_impl(&state)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.title)
+            .collect();
+        assert_eq!(titles, vec!["Apple", "banana", "cherry"]);
+    }
+
+    #[test]
+    fn get_round_trips_password_and_notes() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        let full = get_entry_impl(&state, id).unwrap();
+        assert_eq!(full.id, id);
+        assert_eq!(full.title, "GitHub");
+        assert_eq!(full.password, "hunter2");
+        assert_eq!(full.notes.as_deref(), Some("the cake is a lie"));
+        assert!(full.last_used_at.is_some());
+    }
+
+    #[test]
+    fn get_returns_none_notes_when_notes_missing() {
+        let state = unlocked_state();
+        let id = create_entry_impl(
+            &state,
+            EntryInput {
+                notes: None,
+                ..sample_input()
+            },
+        )
+        .unwrap();
+        let full = get_entry_impl(&state, id).unwrap();
+        assert!(full.notes.is_none());
+    }
+
+    #[test]
+    fn get_returns_none_notes_when_notes_empty_string() {
+        let state = unlocked_state();
+        let id = create_entry_impl(
+            &state,
+            EntryInput {
+                notes: Some(String::new()),
+                ..sample_input()
+            },
+        )
+        .unwrap();
+        let full = get_entry_impl(&state, id).unwrap();
+        assert!(full.notes.is_none());
+    }
+
+    #[test]
+    fn get_returns_entry_not_found_for_missing_id() {
+        let state = unlocked_state();
+        assert!(matches!(
+            get_entry_impl(&state, 9999),
+            Err(AppError::EntryNotFound)
+        ));
+    }
+
+    #[test]
+    fn update_changes_fields_and_round_trips_new_password() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        update_entry_impl(
+            &state,
+            id,
+            EntryInput {
+                title: "GitHub Pro".into(),
+                username: "alice2".into(),
+                url_or_app_name: "github.com".into(),
+                password: "newpass".into(),
+                notes: Some("rotated".into()),
+                category_id: None,
+            },
+        )
+        .unwrap();
+        let full = get_entry_impl(&state, id).unwrap();
+        assert_eq!(full.title, "GitHub Pro");
+        assert_eq!(full.username, "alice2");
+        assert_eq!(full.password, "newpass");
+        assert_eq!(full.notes.as_deref(), Some("rotated"));
+    }
+
+    #[test]
+    fn update_clears_notes_when_set_to_none() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        update_entry_impl(
+            &state,
+            id,
+            EntryInput {
+                notes: None,
+                ..sample_input()
+            },
+        )
+        .unwrap();
+        let full = get_entry_impl(&state, id).unwrap();
+        assert!(full.notes.is_none());
+    }
+
+    #[test]
+    fn update_returns_entry_not_found_for_missing_id() {
+        let state = unlocked_state();
+        let err = update_entry_impl(&state, 9999, sample_input()).unwrap_err();
+        assert!(matches!(err, AppError::EntryNotFound));
+    }
+
+    #[test]
+    fn delete_removes_existing_entry() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        delete_entry_impl(&state, id).unwrap();
+        assert!(list_entries_impl(&state).unwrap().is_empty());
+        assert!(matches!(
+            get_entry_impl(&state, id),
+            Err(AppError::EntryNotFound)
+        ));
+    }
+
+    #[test]
+    fn delete_returns_entry_not_found_for_missing_id() {
+        let state = unlocked_state();
+        let err = delete_entry_impl(&state, 9999).unwrap_err();
+        assert!(matches!(err, AppError::EntryNotFound));
+    }
+
+    #[test]
+    fn create_rejects_blank_title() {
+        let state = unlocked_state();
+        let err = create_entry_impl(
+            &state,
+            EntryInput {
+                title: "   ".into(),
+                ..sample_input()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn create_rejects_empty_password() {
+        let state = unlocked_state();
+        let err = create_entry_impl(
+            &state,
+            EntryInput {
+                password: String::new(),
+                ..sample_input()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn get_entry_rejects_when_locked() {
+        let state = locked_state();
+        assert!(matches!(
+            get_entry_impl(&state, 1),
+            Err(AppError::Locked)
+        ));
     }
 }
