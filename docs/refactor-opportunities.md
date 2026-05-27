@@ -60,7 +60,7 @@ reasons so a human can decide.
 - **Suggested validation:** `cargo test` (covered by `create_rejects_duplicate_name`,
   `update_rejects_duplicate_name`, `update_returns_category_not_found_for_missing_id`).
 - **Dependency ordering:** None (independent).
-- **Autopilot status:** Planned
+- **Autopilot status:** Implemented
 
 ### Opportunity 2 — Resolve clippy `type_complexity` in entries (type alias)
 
@@ -181,6 +181,6 @@ Baseline at report time: **57 Rust tests pass**, **26 Vitest tests pass**,
 | # | Cleanup | Files | Validation | Commit | Push | Notes |
 |---|---------|-------|------------|--------|------|-------|
 | 0 | Add refactor opportunities report | `docs/refactor-opportunities.md` | n/a (docs) | _pending_ | _pending_ | Initial plan. |
-| 1 | Extract `map_category_write_error` | `src-tauri/src/commands/categories.rs` | _pending_ | _pending_ | _pending_ | Planned. |
+| 1 | Extract `map_category_write_error` | `src-tauri/src/commands/categories.rs` | `cargo test` 57 ✓, `cargo clippy` no new warnings | _this commit_ | pushed | Behavior preserved; both call sites use `.map_err(map_category_write_error)`. |
 | 2 | `OptionalCiphertext` type alias | `src-tauri/src/commands/entries.rs` | _pending_ | _pending_ | _pending_ | Planned. |
 | 3 | Remove dead `last_used_at` read | `src-tauri/src/commands/entries.rs` | _pending_ | _pending_ | _pending_ | Planned. |

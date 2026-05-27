@@ -45,22 +45,31 @@ fn list_categories_impl(state: &AppState) -> Result<Vec<Category>, AppError> {
     })
 }
 
+/// Maps a write failure on the `categories` table to an `AppError`, turning the
+/// `UNIQUE(name)` constraint violation into a friendly validation message and
+/// passing every other database error through unchanged.
+fn map_category_write_error(e: rusqlite::Error) -> AppError {
+    match e {
+        rusqlite::Error::SqliteFailure(f, _)
+            if f.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            AppError::Validation("a category with that name already exists")
+        }
+        other => AppError::Database(other),
+    }
+}
+
 fn create_category_impl(state: &AppState, name: String) -> Result<i64, AppError> {
     let trimmed = validate_name(&name)?;
     with_authorized(state, |s| {
         let now = now_iso8601();
-        match s.conn.execute(
-            "INSERT INTO categories (name, created_at, updated_at) VALUES (?1, ?2, ?2)",
-            rusqlite::params![trimmed, now],
-        ) {
-            Ok(_) => Ok(s.conn.last_insert_rowid()),
-            Err(rusqlite::Error::SqliteFailure(e, _))
-                if e.code == rusqlite::ErrorCode::ConstraintViolation =>
-            {
-                Err(AppError::Validation("a category with that name already exists"))
-            }
-            Err(e) => Err(AppError::Database(e)),
-        }
+        s.conn
+            .execute(
+                "INSERT INTO categories (name, created_at, updated_at) VALUES (?1, ?2, ?2)",
+                rusqlite::params![trimmed, now],
+            )
+            .map_err(map_category_write_error)?;
+        Ok(s.conn.last_insert_rowid())
     })
 }
 
@@ -68,20 +77,17 @@ fn update_category_impl(state: &AppState, id: i64, name: String) -> Result<(), A
     let trimmed = validate_name(&name)?;
     with_authorized(state, |s| {
         let now = now_iso8601();
-        let result = s.conn.execute(
-            "UPDATE categories SET name = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![trimmed, now, id],
-        );
-        match result {
-            Ok(0) => Err(AppError::CategoryNotFound),
-            Ok(_) => Ok(()),
-            Err(rusqlite::Error::SqliteFailure(e, _))
-                if e.code == rusqlite::ErrorCode::ConstraintViolation =>
-            {
-                Err(AppError::Validation("a category with that name already exists"))
-            }
-            Err(e) => Err(AppError::Database(e)),
+        let n = s
+            .conn
+            .execute(
+                "UPDATE categories SET name = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![trimmed, now, id],
+            )
+            .map_err(map_category_write_error)?;
+        if n == 0 {
+            return Err(AppError::CategoryNotFound);
         }
+        Ok(())
     })
 }
 
