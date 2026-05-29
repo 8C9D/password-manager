@@ -55,10 +55,14 @@ fn validate_input(input: &EntryInput) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Encrypted bytes paired with their nonce for an optional field; both are
+/// `None` when the field is absent or empty.
+type OptionalCiphertext = (Option<Vec<u8>>, Option<Vec<u8>>);
+
 fn encrypt_optional(
     key: &[u8; 32],
     plaintext: Option<&str>,
-) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>), AppError> {
+) -> Result<OptionalCiphertext, AppError> {
     match plaintext {
         Some(s) if !s.is_empty() => {
             let ct = crypto::encrypt(key, s.as_bytes())?;

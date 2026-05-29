@@ -76,7 +76,7 @@ reasons so a human can decide.
 - **Expected benefit:** Zero warnings from `cargo clippy`; clearer signature.
 - **Suggested validation:** `cargo clippy --all-targets` (warning gone) + `cargo test`.
 - **Dependency ordering:** None (independent).
-- **Autopilot status:** Planned
+- **Autopilot status:** Implemented
 
 ### Opportunity 3 — Remove the dead `last_used_at` read in `get_entry_impl`
 
@@ -182,5 +182,5 @@ Baseline at report time: **57 Rust tests pass**, **26 Vitest tests pass**,
 |---|---------|-------|------------|--------|------|-------|
 | 0 | Add refactor opportunities report | `docs/refactor-opportunities.md` | n/a (docs) | _pending_ | _pending_ | Initial plan. |
 | 1 | Extract `map_category_write_error` | `src-tauri/src/commands/categories.rs` | `cargo test` 57 ✓, `cargo clippy` no new warnings | _this commit_ | pushed | Behavior preserved; both call sites use `.map_err(map_category_write_error)`. |
-| 2 | `OptionalCiphertext` type alias | `src-tauri/src/commands/entries.rs` | _pending_ | _pending_ | _pending_ | Planned. |
+| 2 | `OptionalCiphertext` type alias | `src-tauri/src/commands/entries.rs` | `cargo clippy` now **0 warnings**, `cargo test` entries 17 ✓ | _this commit_ | pushed | Clears the only crate lint warning. |
 | 3 | Remove dead `last_used_at` read | `src-tauri/src/commands/entries.rs` | _pending_ | _pending_ | _pending_ | Planned. |
