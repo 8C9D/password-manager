@@ -153,8 +153,6 @@ struct EntryRow {
     notes_nonce: Option<Vec<u8>>,
     created_at: String,
     updated_at: String,
-    #[allow(dead_code)]
-    last_used_at: Option<String>,
 }
 
 fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
@@ -165,7 +163,7 @@ fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
                 "SELECT id, category_id, title, username, url_or_app_name,
                         encrypted_password, password_nonce,
                         encrypted_notes, notes_nonce,
-                        created_at, updated_at, last_used_at
+                        created_at, updated_at
                  FROM password_entries WHERE id = ?1",
                 [id],
                 |r| {
@@ -181,7 +179,6 @@ fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
                         notes_nonce: r.get(8)?,
                         created_at: r.get(9)?,
                         updated_at: r.get(10)?,
-                        last_used_at: r.get(11)?,
                     })
                 },
             )

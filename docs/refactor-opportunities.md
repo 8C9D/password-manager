@@ -95,7 +95,7 @@ reasons so a human can decide.
   which asserts `full.last_used_at.is_some()` from the response, not the row) +
   `cargo clippy`.
 - **Dependency ordering:** None (independent; same file as Opp 2 but disjoint code).
-- **Autopilot status:** Planned
+- **Autopilot status:** Implemented
 
 ## 4. Quick Wins
 
@@ -183,4 +183,4 @@ Baseline at report time: **57 Rust tests pass**, **26 Vitest tests pass**,
 | 0 | Add refactor opportunities report | `docs/refactor-opportunities.md` | n/a (docs) | _pending_ | _pending_ | Initial plan. |
 | 1 | Extract `map_category_write_error` | `src-tauri/src/commands/categories.rs` | `cargo test` 57 ✓, `cargo clippy` no new warnings | _this commit_ | pushed | Behavior preserved; both call sites use `.map_err(map_category_write_error)`. |
 | 2 | `OptionalCiphertext` type alias | `src-tauri/src/commands/entries.rs` | `cargo clippy` now **0 warnings**, `cargo test` entries 17 ✓ | _this commit_ | pushed | Clears the only crate lint warning. |
-| 3 | Remove dead `last_used_at` read | `src-tauri/src/commands/entries.rs` | _pending_ | _pending_ | _pending_ | Planned. |
+| 3 | Remove dead `last_used_at` read | `src-tauri/src/commands/entries.rs` | `cargo test` 57 ✓, `cargo clippy` clean (no dead-code warning) | _this commit_ | pushed | Dropped field + SELECT column + `r.get(11)`; response value (`Some(now)`) unaffected. |
