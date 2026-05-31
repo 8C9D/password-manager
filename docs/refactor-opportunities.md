@@ -180,7 +180,16 @@ Baseline at report time: **57 Rust tests pass**, **26 Vitest tests pass**,
 
 | # | Cleanup | Files | Validation | Commit | Push | Notes |
 |---|---------|-------|------------|--------|------|-------|
-| 0 | Add refactor opportunities report | `docs/refactor-opportunities.md` | n/a (docs) | _pending_ | _pending_ | Initial plan. |
-| 1 | Extract `map_category_write_error` | `src-tauri/src/commands/categories.rs` | `cargo test` 57 ✓, `cargo clippy` no new warnings | _this commit_ | pushed | Behavior preserved; both call sites use `.map_err(map_category_write_error)`. |
-| 2 | `OptionalCiphertext` type alias | `src-tauri/src/commands/entries.rs` | `cargo clippy` now **0 warnings**, `cargo test` entries 17 ✓ | _this commit_ | pushed | Clears the only crate lint warning. |
-| 3 | Remove dead `last_used_at` read | `src-tauri/src/commands/entries.rs` | `cargo test` 57 ✓, `cargo clippy` clean (no dead-code warning) | _this commit_ | pushed | Dropped field + SELECT column + `r.get(11)`; response value (`Some(now)`) unaffected. |
+| 0 | Add refactor opportunities report | `docs/refactor-opportunities.md` | n/a (docs) | `4dfbfd2` | pushed | Initial plan. |
+| 1 | Extract `map_category_write_error` | `src-tauri/src/commands/categories.rs` | `cargo test` 57 ✓, `cargo clippy` no new warnings | `968f1ae` | pushed | Behavior preserved; both call sites use `.map_err(map_category_write_error)`. |
+| 2 | `OptionalCiphertext` type alias | `src-tauri/src/commands/entries.rs` | `cargo clippy` now **0 warnings**, `cargo test` entries 17 ✓ | `c5a4bd3` | pushed | Clears the only crate lint warning. |
+| 3 | Remove dead `last_used_at` read | `src-tauri/src/commands/entries.rs` | `cargo test` 57 ✓, `cargo clippy` clean (no dead-code warning) | `fdd083d` | pushed | Dropped field + SELECT column + `r.get(11)`; response value (`Some(now)`) unaffected. |
+
+### Run summary
+
+Autopilot completed on `chore/repo-cleanup`. **3 cleanups implemented** (all
+Rust-only, behavior-preserving), **5 documented and skipped** (Opps 4–8 in §5/§6:
+behavior change, multi-file churn, or visual-only/weak validation — left for
+human review). Final state: **57 Rust tests pass**, **26 Vitest tests pass**
+(frontend untouched), **`cargo clippy` warning-free**. No high-risk changes were
+attempted; the working tree is clean.
