@@ -98,7 +98,20 @@ Defer Gaps D and E because they would require production refactors, which is out
 
 ## 5. Implemented Test Improvements
 
-_Filled in as each improvement lands._
+### Improvement 1 — `AppError` serialization contract (Gap A)
+
+- **Files changed:** `src-tauri/src/error.rs` (added `#[cfg(test)] mod tests`).
+- **Behavior covered:** The `{ kind, message }` wire format produced by `impl Serialize for AppError`, which the frontend's `formatBackendError` consumes.
+- **New test cases:**
+  - `unit_variants_map_to_expected_kind_and_message` — the 6 simple variants map to their exact `kind` strings and messages.
+  - `validation_message_keeps_the_prefix_the_frontend_strips` — `Validation` keeps the `validation: ` prefix the frontend strips.
+  - `crypto_message_carries_crypto_prefix` — `Crypto` carries its `crypto: ` prefix.
+  - `database_and_io_errors_serialize_to_opaque_kinds` — `Database`/`Io` map to `database`/`io` with generic messages.
+  - `internal_error_does_not_leak_detail_to_the_wire` — `Internal`'s inner string never reaches the wire message.
+- **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib error::`, then the full `--lib` suite.
+- **Result:** Pass — 5 new tests; full suite 57 → 62 passing, 0 failed.
+- **Commit hash:** _(this commit)_
+- **Push result:** Pushed to `origin/chore/repo-cleanup`.
 
 ## 6. Skipped Opportunities
 
