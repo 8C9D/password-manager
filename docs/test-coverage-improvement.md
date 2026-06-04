@@ -110,6 +110,16 @@ Defer Gaps D and E because they would require production refactors, which is out
   - `internal_error_does_not_leak_detail_to_the_wire` — `Internal`'s inner string never reaches the wire message.
 - **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib error::`, then the full `--lib` suite.
 - **Result:** Pass — 5 new tests; full suite 57 → 62 passing, 0 failed.
+- **Commit hash:** `1e380d6`
+- **Push result:** Pushed to `origin/chore/repo-cleanup`.
+
+### Improvement 2 — `read_secs` corrupt-value fallback (Gap B)
+
+- **Files changed:** `src-tauri/src/commands/settings.rs` (added one test to `settings::tests`).
+- **Behavior covered:** `read_secs`'s fallback when the stored `auto_lock_secs` value exists but cannot be parsed as `u64`.
+- **New test case:** `get_falls_back_to_default_when_stored_value_is_not_a_number` — inserts a raw `'not-a-number'` row directly into the `settings` table, then asserts `get_settings_impl` returns `DEFAULT_AUTO_LOCK_SECS` instead of erroring.
+- **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib settings::`, then the full `--lib` suite.
+- **Result:** Pass — 1 new test; full suite 62 → 63 passing, 0 failed.
 - **Commit hash:** _(this commit)_
 - **Push result:** Pushed to `origin/chore/repo-cleanup`.
 

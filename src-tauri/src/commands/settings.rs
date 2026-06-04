@@ -139,4 +139,25 @@ mod tests {
         let settings = get_settings_impl(&state).unwrap();
         assert_eq!(settings.auto_lock_secs, DEFAULT_AUTO_LOCK_SECS);
     }
+
+    #[test]
+    fn get_falls_back_to_default_when_stored_value_is_not_a_number() {
+        let state = unlocked_state();
+        // Simulate a corrupt or hand-edited row whose value can't parse as u64.
+        // `read_secs` must fall back to the default rather than panic or yield
+        // a garbage timeout that would weaken the auto-lock guarantee.
+        {
+            let guard = state.inner.lock().unwrap();
+            guard
+                .conn
+                .execute(
+                    "INSERT INTO settings (key, value, updated_at)
+                     VALUES ('auto_lock_secs', 'not-a-number', '2026-05-28T00:00:00Z')",
+                    [],
+                )
+                .unwrap();
+        }
+        let settings = get_settings_impl(&state).unwrap();
+        assert_eq!(settings.auto_lock_secs, DEFAULT_AUTO_LOCK_SECS);
+    }
 }
