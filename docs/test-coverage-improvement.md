@@ -120,6 +120,18 @@ Defer Gaps D and E because they would require production refactors, which is out
 - **New test case:** `get_falls_back_to_default_when_stored_value_is_not_a_number` — inserts a raw `'not-a-number'` row directly into the `settings` table, then asserts `get_settings_impl` returns `DEFAULT_AUTO_LOCK_SECS` instead of erroring.
 - **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib settings::`, then the full `--lib` suite.
 - **Result:** Pass — 1 new test; full suite 62 → 63 passing, 0 failed.
+- **Commit hash:** `036afb8`
+- **Push result:** Pushed to `origin/chore/repo-cleanup`.
+
+### Improvement 3 — category name length boundary (Gap C)
+
+- **Files changed:** `src-tauri/src/commands/categories.rs` (added two tests to `categories::tests`).
+- **Behavior covered:** `validate_name`'s 64-character cap (`trimmed.len() > 64`).
+- **New test cases:**
+  - `create_rejects_name_longer_than_64_chars` — a 65-char name is rejected with a validation error.
+  - `create_accepts_name_of_exactly_64_chars` — a 64-char name is accepted and round-trips through the DB.
+- **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib categories::`, then the full `--lib` suite.
+- **Result:** Pass — 2 new tests; full suite 63 → 65 passing, 0 failed.
 - **Commit hash:** _(this commit)_
 - **Push result:** Pushed to `origin/chore/repo-cleanup`.
 
@@ -131,5 +143,5 @@ Defer Gaps D and E because they would require production refactors, which is out
 ## 7. Final Notes
 
 - The backend suite is the right place to add value: it holds the security-critical logic and has a clean, in-memory-DB testing pattern that new tests can follow exactly.
-- The three implemented improvements all guard previously-untested branches without touching production code.
+- The three implemented improvements all guard previously-untested branches without touching production code; together they took the backend suite from 57 to 65 passing tests (+8), 0 failed.
 - The most valuable remaining follow-up is extracting `*_impl` helpers in `vault.rs` so the master-password and unlock paths can be unit-tested like the other command modules.

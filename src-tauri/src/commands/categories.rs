@@ -225,4 +225,22 @@ mod tests {
         let err = delete_category_impl(&state, 9999).unwrap_err();
         assert!(matches!(err, AppError::CategoryNotFound));
     }
+
+    #[test]
+    fn create_rejects_name_longer_than_64_chars() {
+        let state = unlocked_state();
+        let err = create_category_impl(&state, "a".repeat(65)).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn create_accepts_name_of_exactly_64_chars() {
+        let state = unlocked_state();
+        let name = "a".repeat(64);
+        let id = create_category_impl(&state, name.clone()).unwrap();
+        let cats = list_categories_impl(&state).unwrap();
+        assert_eq!(cats.len(), 1);
+        assert_eq!(cats[0].id, id);
+        assert_eq!(cats[0].name, name);
+    }
 }
