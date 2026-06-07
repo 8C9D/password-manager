@@ -132,7 +132,7 @@ Defer Gaps D and E because they would require production refactors, which is out
   - `create_accepts_name_of_exactly_64_chars` — a 64-char name is accepted and round-trips through the DB.
 - **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib categories::`, then the full `--lib` suite.
 - **Result:** Pass — 2 new tests; full suite 63 → 65 passing, 0 failed.
-- **Commit hash:** _(this commit)_
+- **Commit hash:** `983979d`
 - **Push result:** Pushed to `origin/chore/repo-cleanup`.
 
 ## 6. Skipped Opportunities
