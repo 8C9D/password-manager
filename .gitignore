@@ -19,6 +19,13 @@ yarn-error.log
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite3
+
+# Environment & secrets (never commit)
+.env
+.env.*
+!.env.example
 
 # IDEs and editors
 .idea/
