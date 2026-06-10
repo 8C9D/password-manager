@@ -107,7 +107,7 @@ No CI/CD configuration is present (`.github/workflows` absent), so there are no 
 - **What changed:** Added `*.sqlite`/`*.sqlite3` to the local-vault-data section and a new "Environment & secrets" section with `.env`, `.env.*`, and a `!.env.example` exception.
 - **Why it is safe:** `.gitignore` does not affect application behavior, and no currently-tracked file matches the new patterns (verified via `git ls-files` and `git status`), so nothing is untracked or hidden. Purely preventive.
 - **Validation run:** `git status --short`, `git ls-files | grep -Ei '\.env|\.sqlite'` (no matches), `git diff --check`.
-- **Commit hash:** _(this commit)_
+- **Commit hash:** `81142fa`
 - **Push result:** Pushed to `origin/chore/repo-cleanup`.
 
 ## 12. Recommended Manual Fix Order
