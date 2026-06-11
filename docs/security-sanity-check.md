@@ -1,6 +1,6 @@
 # Security Sanity Check Report
 
-_Generated 2026-05-28 on branch `chore/repo-cleanup`. This is a practical hygiene review, not a formal penetration test or full audit._
+_Generated 2026-05-28 on branch `chore/repo-cleanup` (re-verified the same day; a README "Security & data" section was added this pass). This is a practical hygiene review, not a formal penetration test or full audit._
 
 ## 1. Scope
 
@@ -22,7 +22,7 @@ Local, static inspection of the tracked repository: secrets/sensitive files, `.g
 
 The codebase is notably security-conscious. Crypto choices are sound, all SQL is parameterized, there is no `unsafe` Rust, no shell execution, no XSS-prone frontend APIs, no secrets committed, and the local vault database is git-ignored and stored outside the repo. Dependency audit (npm) is clean.
 
-The main hardening gap is the **absent Content-Security-Policy** (`csp: null`), which is a defense-in-depth concern for a high-value target rather than an active vulnerability today. One safe `.gitignore` hygiene improvement was auto-applied.
+The main hardening gap is the **absent Content-Security-Policy** (`csp: null`), which is a defense-in-depth concern for a high-value target rather than an active vulnerability today. Two safe, behavior-neutral hygiene improvements have been auto-applied: a `.gitignore` hardening (prior pass) and a README "Security & data" section (this pass).
 
 ## 4. Findings
 
@@ -56,9 +56,9 @@ The main hardening gap is the **absent Content-Security-Policy** (`csp: null`), 
 - **Title:** Default Angular CLI README
 - **Location:** `README.md`
 - **Evidence:** README is the generated Angular boilerplate; it doesn't mention that the vault DB is stored locally in the OS app-data dir and must never be committed, nor the master-password/auto-lock model.
-- **Why it matters:** Minor; documenting the local-storage/secret-handling model helps contributors avoid mistakes.
+- **Why it matters:** Minor; documenting the local-storage/secret-handling model helps contributors avoid mistakes (e.g. accidentally committing a vault DB or assuming a forgotten master password can be recovered).
 - **Recommended fix:** Add a short "Security & data" note to the README.
-- **Auto-fix status:** Skipped (low value; left as a recommendation to avoid noise).
+- **Auto-fix status:** Fixed (see §11) — added a "Security & data" section to `README.md`.
 - **Secret/value redacted:** No.
 - **Confidence:** High.
 
@@ -87,7 +87,7 @@ Strong baseline: `node_modules`, `/dist`, `/src-tauri/target`, `/gen/schemas`, `
 - **Unsafe Rust / command execution:** None. No `unsafe`, no `std::process`/`Command`, no `std::fs` beyond the startup `create_dir_all` of the app-data dir.
 - **Input validation:** master password length (≥ 8, non-empty), entry title/password required, category name non-empty and ≤ 64 chars, generator length 4–256, auto-lock 30 s–24 h — all enforced server-side in Rust and covered by unit tests.
 - **Frontend XSS:** No `innerHTML`, `outerHTML`, `document.write`, `eval`, `javascript:`, or `bypassSecurityTrust*`. Angular template auto-escaping is intact; entry data is rendered via interpolation.
-- **Logging:** No `log`/`println!`/`dbg!` statements in the Rust source; backend errors serialized to the frontend are opaque for `database`/`io`/`internal` variants (no internal detail leaked) — covered by `error.rs` tests.
+- **Logging:** The application code emits no `log`/`println!`/`dbg!` records of its own. `tauri-plugin-log` is enabled (level `Info`, `src-tauri/src/lib.rs`) for framework diagnostics only, so no master password, derived key, or decrypted entry data is written to logs. Backend errors serialized to the frontend are opaque for `database`/`io`/`internal` variants (no internal detail leaked) — covered by `error.rs` tests.
 
 ## 9. Dependency and Tooling Review
 
@@ -110,11 +110,19 @@ No CI/CD configuration is present (`.github/workflows` absent), so there are no 
 - **Commit hash:** `81142fa`
 - **Push result:** Pushed to `origin/chore/repo-cleanup`.
 
+### Fix 2 — Add a "Security & data" section to the README
+
+- **Files changed:** `README.md`
+- **What changed:** Added a "Security & data" section documenting that this is a local-only app (no server/sync), where the encrypted vault lives (OS app-data dir, git-ignored — never commit it or any `.env`), the crypto model (Argon2id → AES-256-GCM, master password never stored and zeroized on lock), that a forgotten master password is unrecoverable, and the auto-lock / clipboard auto-clear behavior.
+- **Why it is safe:** Documentation only — no code, build, or runtime behavior changes. The content restates the model already implemented and verified in §7–§8; it adds no claims about behavior that does not exist.
+- **Validation run:** `git diff --check` (no whitespace errors); confirmed the diff touches only `README.md` and this report (no source/build files).
+- **Commit hash:** `__FIX2_HASH__`
+- **Push result:** Pushed to `origin/chore/repo-cleanup`.
+
 ## 12. Recommended Manual Fix Order
 
 1. **Define a restrictive CSP** (Finding 1) and validate against the built Tauri app — highest-value hardening.
-2. Add a CI workflow with `npm audit` + `cargo audit` gates and secret scanning (Finding in §10 / §9).
-3. Add a short README "Security & data" note (Finding 3).
+2. Add a CI workflow with `npm audit` + `cargo audit` gates and secret scanning (§9 / §10).
 
 ## 13. Commands Run
 
@@ -131,8 +139,14 @@ git grep -n "process.env|import.meta.env|std::env::var|dotenv" -- src src-tauri/
 find . -maxdepth 3 \( -name '*.db' -o -name '.env*' -o -name '*.pem' -o -name '*.key' -o -name '*.sqlite*' ... \)
 ls .github/workflows
 npm audit --audit-level=moderate
+
+# Re-verification pass (2026-05-28) + README fix:
+git ls-files | grep -Ei '\.(env|pem|key|p12|pfx|db|sqlite|sqlite3)$|id_rsa|credentials|secret'   # none
+git grep -nI "process.env|import.meta.env|std::env::var|dotenv" -- src src-tauri/src               # none
+npm audit --audit-level=moderate                                                                   # 0 vulnerabilities
+git diff --check ; git diff --stat
 ```
 
 ## 14. Final Notes
 
-For a personal, local-only password manager this is a clean, defensively-written codebase: sound modern crypto with key zeroization, parameterized SQL, no unsafe/shell/dynamic-SQL paths, no XSS sinks, no committed secrets, ignored local vault data, minimal Tauri capabilities (clipboard text + core only), clipboard auto-clear, and a clean dependency audit. The single meaningful hardening step is adopting an explicit Content-Security-Policy; everything else is incremental. No risky changes were made; the only auto-fix is a behavior-neutral `.gitignore` improvement.
+For a personal, local-only password manager this is a clean, defensively-written codebase: sound modern crypto with key zeroization, parameterized SQL, no unsafe/shell/dynamic-SQL paths, no XSS sinks, no committed secrets, ignored local vault data, minimal Tauri capabilities (clipboard text + core only), clipboard auto-clear, and a clean dependency audit. A re-verification pass on 2026-05-28 reconfirmed all findings (the password generator uses `OsRng`; entries are AES-256-GCM-encrypted at rest and gated behind the unlock state; SQLite enables foreign keys and WAL). The single meaningful hardening step is adopting an explicit Content-Security-Policy; everything else is incremental. No risky changes were made; the two auto-fixes are behavior-neutral — a `.gitignore` hardening and a README "Security & data" section.
