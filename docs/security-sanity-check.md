@@ -116,7 +116,7 @@ No CI/CD configuration is present (`.github/workflows` absent), so there are no 
 - **What changed:** Added a "Security & data" section documenting that this is a local-only app (no server/sync), where the encrypted vault lives (OS app-data dir, git-ignored — never commit it or any `.env`), the crypto model (Argon2id → AES-256-GCM, master password never stored and zeroized on lock), that a forgotten master password is unrecoverable, and the auto-lock / clipboard auto-clear behavior.
 - **Why it is safe:** Documentation only — no code, build, or runtime behavior changes. The content restates the model already implemented and verified in §7–§8; it adds no claims about behavior that does not exist.
 - **Validation run:** `git diff --check` (no whitespace errors); confirmed the diff touches only `README.md` and this report (no source/build files).
-- **Commit hash:** `__FIX2_HASH__`
+- **Commit hash:** `68c8b72`
 - **Push result:** Pushed to `origin/chore/repo-cleanup`.
 
 ## 12. Recommended Manual Fix Order
