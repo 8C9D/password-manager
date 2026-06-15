@@ -143,7 +143,7 @@ mod tests {
             "database error",
         );
         assert_wire(
-            AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, "disk gone")),
+            AppError::Io(std::io::Error::other("disk gone")),
             "io",
             "io error",
         );
