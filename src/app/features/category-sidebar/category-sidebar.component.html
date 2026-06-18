@@ -1,0 +1,22 @@
+<div class="sidebar">
+  <h2>Categories</h2>
+  <button
+    type="button"
+    class="cat"
+    [class.active]="categories.selected() === null"
+    (click)="select(null)"
+  >
+    All entries
+  </button>
+  @for (c of categories.categories(); track c.id) {
+    <button
+      type="button"
+      class="cat"
+      [class.active]="categories.selected() === c.id"
+      (click)="select(c.id)"
+    >
+      {{ c.name }}
+    </button>
+  }
+  <a routerLink="/vault/categories" class="manage">Manage categories…</a>
+</div>
