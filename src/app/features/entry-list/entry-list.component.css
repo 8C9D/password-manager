@@ -1,0 +1,50 @@
+:host {
+  display: block;
+  height: 100%;
+}
+.list-container {
+  padding: 0.5rem 0;
+}
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+a {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.55rem 1rem;
+  text-decoration: none;
+  color: inherit;
+  border-left: 3px solid transparent;
+}
+a:hover {
+  background: var(--hover);
+}
+a.selected {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+  color: var(--accent-strong);
+}
+.title {
+  font-weight: 500;
+}
+.sub {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+a.selected .sub {
+  color: var(--accent-strong);
+  opacity: 0.8;
+}
+.empty {
+  padding: 1.5rem 1rem;
+  text-align: center;
+}
+.muted {
+  color: var(--muted);
+}
+.small {
+  font-size: 0.8rem;
+}

@@ -1,0 +1,32 @@
+<div class="list-container">
+  @if (loading()) {
+    <p class="muted">Loading…</p>
+  } @else if (visible().length === 0) {
+    @if (entries.entries().length === 0) {
+      <div class="empty">
+        <p>No entries yet.</p>
+        <p class="muted small">Click "+ Add entry" to add your first one.</p>
+      </div>
+    } @else {
+      <div class="empty">
+        <p class="muted">No entries match this filter.</p>
+      </div>
+    }
+  } @else {
+    <ul>
+      @for (entry of visible(); track entry.id) {
+        <li>
+          <a
+            [routerLink]="['/vault', entry.id]"
+            routerLinkActive="selected"
+          >
+            <span class="title">{{ entry.title }}</span>
+            @if (entry.username) {
+              <span class="sub">{{ entry.username }}</span>
+            }
+          </a>
+        </li>
+      }
+    </ul>
+  }
+</div>
