@@ -1,0 +1,28 @@
+@if (state().open) {
+  <div class="backdrop" (click)="cancel()">
+    <div
+      class="dialog"
+      role="dialog"
+      aria-modal="true"
+      (click)="$event.stopPropagation()"
+    >
+      <h3>{{ state().title }}</h3>
+      <p>{{ state().message }}</p>
+      <div class="actions">
+        <button type="button" class="btn" (click)="cancel()">
+          {{ state().cancelLabel }}
+        </button>
+        <button
+          type="button"
+          class="btn"
+          [class.danger]="state().danger"
+          [class.primary]="!state().danger"
+          (click)="confirm()"
+          autofocus
+        >
+          {{ state().confirmLabel }}
+        </button>
+      </div>
+    </div>
+  </div>
+}

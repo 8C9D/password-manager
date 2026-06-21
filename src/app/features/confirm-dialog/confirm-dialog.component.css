@@ -1,0 +1,38 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+}
+.dialog {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.2rem 1.4rem;
+  min-width: 320px;
+  max-width: 480px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
+}
+h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+p {
+  margin: 0 0 1rem;
+  color: var(--text);
+}
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+.btn.danger {
+  background: var(--danger);
+  color: white;
+  border-color: var(--danger);
+}
+.btn.danger:hover {
+  filter: brightness(1.05);
+}
