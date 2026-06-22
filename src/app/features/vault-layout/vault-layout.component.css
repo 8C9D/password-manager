@@ -1,0 +1,61 @@
+:host {
+  display: block;
+  height: 100vh;
+}
+.layout {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  height: 100%;
+  background: var(--bg);
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.topbar h1 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  margin-right: 0.5rem;
+}
+.search {
+  flex: 0 1 360px;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.search:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.spacer {
+  flex: 1;
+}
+.clipboard-banner {
+  background: #fff7e0;
+  border-bottom: 1px solid #f1d588;
+  color: #6a4d00;
+  padding: 0.4rem 1rem;
+  font-size: 0.85rem;
+}
+.cols {
+  display: grid;
+  grid-template-columns: 220px 320px 1fr;
+  overflow: hidden;
+}
+app-category-sidebar,
+.list-pane {
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
+}
+.detail-pane {
+  overflow-y: auto;
+}
