@@ -1,0 +1,69 @@
+:host {
+  display: block;
+}
+.shell {
+  padding: 1.25rem 1.5rem;
+  max-width: 600px;
+}
+.head {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.head h2 {
+  flex: 1;
+  margin: 0;
+}
+.new-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.new-row input {
+  flex: 1;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.list li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.name {
+  flex: 1;
+}
+.list input {
+  flex: 1;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+.warn {
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+.muted {
+  color: var(--muted);
+}
+.btn.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}

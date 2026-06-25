@@ -1,0 +1,47 @@
+<div class="shell">
+  <header class="head">
+    <h2>Categories</h2>
+    <a routerLink="/vault" class="btn small">Back</a>
+  </header>
+
+  <form (ngSubmit)="onCreate()" class="new-row">
+    <input
+      type="text"
+      name="newName"
+      [(ngModel)]="newName"
+      placeholder="New category name"
+      maxlength="64"
+    />
+    <button type="submit" class="btn primary" [disabled]="busy() || newName.trim() === ''">
+      Add
+    </button>
+  </form>
+  @if (errorMsg()) {
+    <p class="warn">{{ errorMsg() }}</p>
+  }
+
+  @if (categories.categories().length === 0) {
+    <p class="muted">No categories yet.</p>
+  } @else {
+    <ul class="list">
+      @for (c of categories.categories(); track c.id) {
+        <li>
+          @if (editingId() === c.id) {
+            <input
+              type="text"
+              [(ngModel)]="editingName"
+              [ngModelOptions]="{ standalone: true }"
+              maxlength="64"
+            />
+            <button class="btn small primary" type="button" (click)="onRename(c.id)">Save</button>
+            <button class="btn small" type="button" (click)="cancelEdit()">Cancel</button>
+          } @else {
+            <span class="name">{{ c.name }}</span>
+            <button class="btn small" type="button" (click)="startEdit(c)">Rename</button>
+            <button class="btn small danger" type="button" (click)="onDelete(c)">Delete</button>
+          }
+        </li>
+      }
+    </ul>
+  }
+</div>
