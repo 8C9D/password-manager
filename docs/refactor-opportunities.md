@@ -92,7 +92,7 @@ are documented in §6 with reasons so a human can decide.
 - **Suggested validation:** `cargo clippy --all-targets` (0 warnings) + `cargo test`
   (covered by `database_and_io_errors_serialize_to_opaque_kinds`).
 - **Dependency ordering:** None (independent).
-- **Autopilot status:** Planned
+- **Autopilot status:** Implemented (commit `5fe2ed9`)
 
 ### Opportunity 5 — Finish the inline-template/style split (per component)
 
@@ -121,7 +121,8 @@ are documented in §6 with reasons so a human can decide.
 - **Dependency ordering:** None; each component is independent. Done **one at a
   time, one commit each** — i.e. decomposed into small cleanups rather than a
   single large refactor.
-- **Autopilot status:** Planned (per-component)
+- **Autopilot status:** Implemented (per-component — all 7 done; commits
+  `8d41475`, `10f8878`, `32b5eb7`, `fb5bb37`, `6732c8d`, `30b2aae`, `cf1220c`)
 
 ## 4. Quick Wins
 
@@ -205,13 +206,28 @@ addressed by Opportunity 4).
 | 1 | Extract `map_category_write_error` | `categories.rs` | `cargo test` 57 ✓, clippy no new warnings | `968f1ae` | pushed | Behavior preserved. |
 | 2 | `OptionalCiphertext` type alias | `entries.rs` | clippy 0 warnings, `cargo test` ✓ | `c5a4bd3` | pushed | Cleared `type_complexity`. |
 | 3 | Remove dead `last_used_at` read | `entries.rs` | `cargo test` 57 ✓, clippy clean | `fdd083d` | pushed | Dropped field + SELECT column + read. |
-| — | Update report (2026-05-29 re-run) | `docs/refactor-opportunities.md` | n/a (docs) | _pending_ | _pending_ | New baseline + Opps 4–5. |
+| — | Update report (2026-05-29 re-run) | `docs/refactor-opportunities.md` | n/a (docs) | `9bc218e` | pushed | New baseline + Opps 4–5. |
+| 4 | `io::Error::other` in error test | `error.rs` | clippy **0 warnings**, `cargo test` 65 ✓ | `5fe2ed9` | pushed | Clears `io_other_error`; test-only, behavior-identical. |
+| 5a | Split `entry-empty` template/styles | `entry-empty.component.{ts,html,css}` | `ng build` ✓, `ng test` 26 ✓ | `8d41475` | pushed | Verbatim move. |
+| 5b | Split `category-sidebar` template/styles | `category-sidebar.component.{ts,html,css}` | `ng build` ✓, `ng test` 26 ✓ | `10f8878` | pushed | Verbatim move. |
+| 5c | Split `entry-list` template/styles | `entry-list.component.{ts,html,css}` | `ng build` ✓, `ng test` 26 ✓ | `32b5eb7` | pushed | Verbatim move. |
+| 5d | Split `confirm-dialog` template/styles | `confirm-dialog.component.{ts,html,css}` | `ng build` ✓, `ng test` 26 ✓ | `fb5bb37` | pushed | Verbatim move. |
+| 5e | Split `vault-layout` template/styles | `vault-layout.component.{ts,html,css}` | `ng build` ✓, `ng test` 26 ✓ | `6732c8d` | pushed | Verbatim move. |
+| 5f | Split `password-generator-panel` template/styles | `password-generator-panel.component.{ts,html,css}` | `ng build` ✓, `ng test` 26 ✓ | `30b2aae` | pushed | Verbatim move. |
+| 5g | Split `category-manage` template/styles | `category-manage.component.{ts,html,css}` | `ng build` ✓, `ng test` 26 ✓ | `cf1220c` | pushed | Verbatim move; last inline component. |
+| — | Finalize cleanup execution log | `docs/refactor-opportunities.md` | n/a (docs) | _this commit_ | _pending_ | Records Opp 4–5 hashes + statuses. |
 
 ### Run summary
 
 First run (2026-05-28): 3 Rust cleanups implemented (Opps 1–3). Second run
-(2026-05-29): re-analyzed at `b3b2a92` (65 Rust / 26 Vitest tests green,
-`ng build` clean). One **new** clippy warning surfaced (`io_other_error`,
-Opp 4); the template/style split (Opp 5) is now decomposed into per-component
-verbatim moves and queued. Skipped items in §5/§6 unchanged (behavior change,
-multi-file test churn, or visual-only/weak-validation — left for human review).
+(2026-05-29, this run): re-analyzed at `b3b2a92` (65 Rust / 26 Vitest tests
+green, `ng build` clean). **8 cleanups implemented** — the newly-surfaced clippy
+`io_other_error` fix (Opp 4) plus the template/style split finished across all 7
+remaining feature components (Opp 5a–5g), each a verbatim move validated by
+`ng build` + `ng test` and committed/pushed separately. All 11 feature
+components now use the `templateUrl`/`styleUrl` convention.
+
+Final state: **65 Rust tests pass**, **26 Vitest tests pass**, **`ng build`
+clean**, **`cargo clippy` warning-free**. Skipped items in §5/§6 are unchanged
+(behavior change, multi-file test churn, or visual-only/weak-validation — left
+for human review). No high-risk changes attempted; working tree clean.
