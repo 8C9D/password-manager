@@ -1,6 +1,6 @@
 # Test Coverage Improvement Report
 
-_Generated 2026-05-28 on branch `chore/repo-cleanup`._
+_Originally generated 2026-05-28 on `chore/repo-cleanup` (backend pass). Updated 2026-05-29 on `main` for a frontend pass._
 
 ## 1. Repository Test Overview
 
@@ -8,140 +8,145 @@ This is a local-only password manager built as a **Tauri 2 + Angular 21** applic
 
 | Layer | Language | Test framework | How to run |
 | --- | --- | --- | --- |
-| Frontend (`src/`) | TypeScript / Angular 21 | Vitest (`@angular/build:unit-test`) | `npm test` / `ng test` |
+| Frontend (`src/`) | TypeScript / Angular 21 | Vitest (`@angular/build:unit-test`) | `npm test -- --watch=false` |
 | Backend (`src-tauri/src/`) | Rust (Tauri 2) | built-in `#[cfg(test)]` unit tests | `cargo test --manifest-path src-tauri/Cargo.toml --lib` |
 
-Existing tests at the time of writing:
+Existing tests at the time of this update:
 
 - **Frontend** — 2 spec files, both targeting *pure exported functions* rather than Angular DI/rendering:
   - `tauri-invoke.spec.ts` → `formatBackendError` (backend-error → user-message mapping)
   - `password-entry.service.spec.ts` → `filterEntries`, `validateEntryInput`
-- **Backend** — 57 passing unit tests across 8 modules: `commands/{entries,categories,generator,settings}`, `crypto/{aead,kdf}`, `db`, `state`.
-
-Baseline run (backend): `test result: ok. 57 passed; 0 failed` in ~3.1s.
+  - Baseline run: `2 passed (2)` test files, `26 passed (26)` tests.
+- **Backend** — 65 passing unit tests as of the prior pass (was 57; +8 from Gaps A/B/C below), across `commands/{entries,categories,generator,settings}`, `crypto/{aead,kdf}`, `db`, `state`, `error`.
 
 ## 2. Current Coverage Quality Summary
 
-The suite is **high quality and behavior-focused**, not implementation-coupled:
+The suite is **high quality and behavior-focused**, not implementation-coupled. The Rust command layer is consistently structured as testable `*_impl(&AppState, …)` functions behind thin `#[tauri::command]` wrappers, exercised against an in-memory SQLite DB. The frontend deliberately extracts pure logic out of services so it can be tested without a DOM/DI harness.
 
-- The Rust command layer is consistently structured as testable `*_impl(&AppState, …)` functions behind thin `#[tauri::command]` wrappers, exercised against an in-memory SQLite DB (`db::open_in_memory()`). Round-trips, sorting, validation, and not-found error paths are well covered.
-- Crypto (`aead`, `kdf`) covers round-trips, wrong-key/tampering rejection, nonce uniqueness, and length validation.
-- The frontend deliberately extracts pure logic out of services so it can be tested without a DOM/DI harness, and tests that logic thoroughly.
+The **prior pass closed the backend gaps** (§3 A–C, §5 improvements 1–3). This update focuses on the **frontend**, where re-inspection found that the previous report's claim that "the meaningful pure functions are already covered" was slightly too broad:
 
-Gaps are concentrated in three places: (a) the **error-serialization contract** between Rust and TypeScript, which is untested on the Rust side despite the TS side depending on it; (b) a few **untested fallback / boundary branches** inside otherwise-tested modules; and (c) modules that are only reachable through Tauri runtime types (`vault`, `clipboard`) and would need a production refactor to unit-test.
+- `isBackendError` — an **exported** type guard that gates *all* backend-error handling — has no direct tests at all (Gap F).
+- `filterEntries` and `formatBackendError` each have a couple of **untested branches / boundaries** despite otherwise-thorough coverage (Gaps G, H).
+
+Remaining structural gaps are unchanged: modules reachable only through Tauri runtime types (`vault`, `clipboard` on the Rust side; thin signal/timer services and the guard on the TS side) would need a production refactor or a new component-testing style to unit-test, which these test-only passes avoid.
 
 ## 3. Highest-Value Coverage Gaps
 
-### Gap A — `AppError` serialization contract (Rust → TypeScript)
+### Gap F — `isBackendError` type guard is untested _(this pass)_
+
+- **Location:** `src/app/core/services/tauri-invoke.ts` (`isBackendError`)
+- **Why it matters:** This is the predicate that classifies an unknown thrown value as a structured `{ kind, message }` backend error. Every call to `formatBackendError` delegates to it: if it returns a false negative, a real backend error silently degrades to `String(e)` (e.g. `"[object Object]"`); a false positive would route a non-error object through the `kind`/message mapping. It is exported and pivotal, yet only exercised indirectly via `formatBackendError`'s always-well-formed fixtures.
+- **Existing tests:** None directly.
+- **Missing cases:** `null`; `undefined`; primitives (`string`, `number`, `boolean`); arrays; an object missing `kind`; an object missing `message`; a well-formed object (`true`); a well-formed object with extra props (`true`).
+- **Suggested tests:** Direct boolean assertions for each shape in a new `describe('isBackendError')` block.
+- **Risk level:** Low (pure, no production change).
+- **Validation:** `npm test -- --watch=false`
+- **Status:** Planned
+
+### Gap G — `filterEntries` whitespace-only query and empty-input boundaries _(this pass)_
+
+- **Location:** `src/app/core/services/password-entry.service.ts` (`filterEntries`)
+- **Why it matters:** A query made only of whitespace collapses to `''` after `trim()` and must behave like "no query" — returning everything in the current category scope, not matching nothing. That is a real path when a user types or pastes spaces into the search box. The empty-entries input is the natural lower boundary. The existing "trims whitespace" test uses a non-empty term (`'   github   '`), so neither of these is currently exercised.
+- **Existing tests:** 9 cases, including category-only filtering, substring matches, AND-combination, and trimming a populated term.
+- **Missing cases:** whitespace-only query returns all entries (and still respects an active category filter); an empty `entries` array returns `[]`.
+- **Suggested tests:** Two `filterEntries` cases covering the collapsed-query branch and the empty-input boundary.
+- **Risk level:** Low.
+- **Validation:** `npm test -- --watch=false`
+- **Status:** Planned
+
+### Gap H — `formatBackendError` prefix-regex and override edge branches _(this pass)_
+
+- **Location:** `src/app/core/services/tauri-invoke.ts` (`formatBackendError`, `VALIDATION_PREFIX`)
+- **Why it matters:** The `validation:` prefix is stripped with `/^validation:\s*/`. The `\s*` means a no-space `validation:foo` must also strip to `foo` — a contract worth pinning so the regex is not "tightened" to require a space later. An override mapped to an **empty string** is a legitimate way to blank a message (`override !== undefined` is the guard), which is behaviorally distinct from "no override provided". And unknown non-error inputs such as `undefined` must coerce safely. None of these specific branches are covered by the existing cases.
+- **Existing tests:** 11 cases (prefix-with-space strip, no-prefix passthrough, `kind` default maps, overrides replacing defaults and the validation strip, `Error` instances, and `string`/`number`/`null` coercion).
+- **Missing cases:** no-space `validation:` still strips; an empty-string override returns `''`; `undefined` coerces to `"undefined"`.
+- **Suggested tests:** Three additional `formatBackendError` cases.
+- **Risk level:** Low.
+- **Validation:** `npm test -- --watch=false`
+- **Status:** Planned
+
+### Gap A — `AppError` serialization contract (Rust → TypeScript) _(prior pass)_
 
 - **Location:** `src-tauri/src/error.rs` (`impl Serialize for AppError`)
-- **Why it matters:** Every backend command returns `AppError`, which serializes to `{ kind, message }`. The frontend's `formatBackendError` (in `tauri-invoke.ts`, and *tested* in `tauri-invoke.spec.ts`) switches on the exact `kind` strings (`locked`, `wrong_password`, `entry_not_found`, `category_not_found`, `validation`) and strips the `validation: ` message prefix. If the Rust `kind` mapping or message prefixes drift, user-facing error handling breaks silently — the consuming side is tested but the producing side is not. The opaque variants (`database`, `io`, `internal`) also intentionally avoid leaking internal details into the message, which is a security property worth locking in.
-- **Existing tests:** None on the Rust side. The TS consumer is tested in isolation with hand-written fixtures.
-- **Missing cases:** `kind` string for every variant; `validation:`/`crypto:` message prefixes; confirmation that `database`/`io`/`internal` messages are opaque.
-- **Suggested tests:** Serialize each `AppError` variant with `serde_json::to_value` and assert on `kind` and `message`.
-- **Risk level:** Low (pure, no production change).
-- **Validation:** `cargo test --manifest-path src-tauri/Cargo.toml --lib error::`
-- **Status:** Implemented
+- **Why it matters:** Every backend command returns `AppError`, which serializes to `{ kind, message }`. The frontend switches on the exact `kind` strings and strips the `validation: ` prefix; if the Rust mapping drifts, error handling breaks silently. Opaque variants (`database`, `io`, `internal`) must not leak internal detail — a security property.
+- **Risk level:** Low. **Status:** Implemented (see §5, improvement 1).
 
-### Gap B — `read_secs` fallback on a corrupt/unparseable settings value
+### Gap B — `read_secs` fallback on a corrupt/unparseable settings value _(prior pass)_
 
 - **Location:** `src-tauri/src/commands/settings.rs` (`read_secs`)
-- **Why it matters:** `read_secs` defends against a malformed `auto_lock_secs` row via `…parse::<u64>().ok()).unwrap_or(DEFAULT_AUTO_LOCK_SECS)`. Only the *missing-row* default is tested; the *present-but-unparseable* branch (DB hand-edit, corruption, or a future format change) is not. A regression here would surface as a panic or a `0`/garbage auto-lock timeout, defeating a security feature.
-- **Existing tests:** `get_returns_default_when_no_row_exists` covers the `None` path only.
-- **Missing cases:** A row containing a non-numeric value should fall back to the default rather than erroring.
-- **Suggested tests:** Insert a raw non-numeric value into the `settings` table, then assert `get_settings_impl` returns `DEFAULT_AUTO_LOCK_SECS`.
-- **Risk level:** Low.
-- **Validation:** `cargo test --manifest-path src-tauri/Cargo.toml --lib settings::`
-- **Status:** Implemented
+- **Why it matters:** A malformed `auto_lock_secs` row must fall back to the default rather than panicking or yielding a `0`/garbage timeout, which would defeat the auto-lock security feature.
+- **Risk level:** Low. **Status:** Implemented (see §5, improvement 2).
 
-### Gap C — `validate_name` length boundary for categories
+### Gap C — `validate_name` length boundary for categories _(prior pass)_
 
 - **Location:** `src-tauri/src/commands/categories.rs` (`validate_name`)
-- **Why it matters:** Category names are capped at 64 characters (`trimmed.len() > 64`). Blank and duplicate names are tested, but the length cap — the only numeric boundary in the module — is not. Off-by-one regressions in boundary checks are a classic bug.
-- **Existing tests:** `create_rejects_blank_name`, `create_rejects_duplicate_name`.
-- **Missing cases:** A 65-character name is rejected as a validation error; an exactly-64-character name is accepted.
-- **Suggested tests:** Two `create_category_impl` cases around the 64-char boundary.
-- **Risk level:** Low.
-- **Validation:** `cargo test --manifest-path src-tauri/Cargo.toml --lib categories::`
-- **Status:** Implemented
+- **Why it matters:** The 64-character cap is the only numeric boundary in the module; off-by-one boundary regressions are a classic bug.
+- **Risk level:** Low. **Status:** Implemented (see §5, improvement 3).
 
-### Gap D — `vault.rs` command logic is untested
+### Gap D — `vault.rs` command logic is untested _(still open)_
 
 - **Location:** `src-tauri/src/commands/vault.rs`
-- **Why it matters:** Master-password length validation, "vault already exists", and the wrong-password mapping are core security behaviors.
-- **Existing tests:** None. Unlike the other command modules, `vault.rs` puts logic directly in `#[tauri::command]` functions that take `State<'_, AppState>`, so it cannot be called from a unit test without extracting `*_impl(&AppState, …)` helpers first.
-- **Missing cases:** Reject empty / <8-char master password; reject create when a vault already exists; create-then-unlock round trip; wrong password → `WrongPassword`; unlock with no vault → `VaultNotFound`.
-- **Suggested tests:** Same in-memory-DB pattern as `entries.rs`, after a small `_impl` extraction.
-- **Risk level:** Medium — requires a (behavior-preserving) production refactor, which this pass intentionally avoids.
-- **Validation:** `cargo test --manifest-path src-tauri/Cargo.toml --lib vault::`
-- **Status:** Skipped (needs production refactor — see §6)
+- **Why it matters:** Master-password length validation, "vault already exists", and wrong-password mapping are core security behaviors. Logic lives directly in `#[tauri::command]` functions taking `State<'_, AppState>`, so it needs a behavior-preserving `*_impl` extraction before it can be unit-tested.
+- **Risk level:** Medium — requires a production refactor. **Status:** Skipped (see §6).
 
-### Gap E — `copy_to_clipboard` clear-timeout logic is untested
+### Gap E — `copy_to_clipboard` clear-timeout logic is untested _(still open)_
 
 - **Location:** `src-tauri/src/commands/clipboard.rs`
-- **Why it matters:** The clamp on the auto-clear delay (`unwrap_or(DEFAULT_CLEAR_SECS).clamp(1, 600)`) and the "only clear if the clipboard still holds our token" guard are security-relevant.
-- **Existing tests:** None.
-- **Missing cases:** Clamp behavior; token-match clear guard.
-- **Suggested tests:** Would require extracting the pure clamp/decision logic out of the `AppHandle`-bound async command.
-- **Risk level:** Medium — needs a Tauri `AppHandle` and async runtime, or a production refactor.
-- **Status:** Skipped (needs production refactor — see §6)
+- **Why it matters:** The auto-clear delay clamp (`clamp(1, 600)`) and the "only clear if the clipboard still holds our token" guard are security-relevant, but bound to `AppHandle` and an async runtime.
+- **Risk level:** Medium — needs a production refactor. **Status:** Skipped (see §6).
 
 ## 4. Test Improvement Plan
 
-Implement the three Low-risk, zero-production-change gaps, one commit each, validating after each:
+This pass implements the three Low-risk, zero-production-change **frontend** gaps, one commit each, validating after each with `npm test -- --watch=false`:
 
-1. **Gap A** — add an `error::tests` module asserting the `{ kind, message }` contract for all 11 `AppError` variants.
-2. **Gap B** — add a `read_secs` corrupt-value fallback regression test to `settings::tests`.
-3. **Gap C** — add 64-char boundary tests to `categories::tests`.
+1. **Gap F** — add a `describe('isBackendError')` block to `tauri-invoke.spec.ts`.
+2. **Gap G** — add whitespace-only-query and empty-input cases to `filterEntries` in `password-entry.service.spec.ts`.
+3. **Gap H** — add prefix-regex/override/coercion edge cases to `formatBackendError` in `tauri-invoke.spec.ts`.
 
-Defer Gaps D and E because they would require production refactors, which is out of scope for a test-only pass.
+Backend Gaps A–C were implemented in the prior pass. Gaps D and E remain deferred because they require production refactors.
 
 ## 5. Implemented Test Improvements
 
-### Improvement 1 — `AppError` serialization contract (Gap A)
+### Improvement 1 — `AppError` serialization contract (Gap A) _(prior pass)_
 
-- **Files changed:** `src-tauri/src/error.rs` (added `#[cfg(test)] mod tests`).
-- **Behavior covered:** The `{ kind, message }` wire format produced by `impl Serialize for AppError`, which the frontend's `formatBackendError` consumes.
-- **New test cases:**
-  - `unit_variants_map_to_expected_kind_and_message` — the 6 simple variants map to their exact `kind` strings and messages.
-  - `validation_message_keeps_the_prefix_the_frontend_strips` — `Validation` keeps the `validation: ` prefix the frontend strips.
-  - `crypto_message_carries_crypto_prefix` — `Crypto` carries its `crypto: ` prefix.
-  - `database_and_io_errors_serialize_to_opaque_kinds` — `Database`/`Io` map to `database`/`io` with generic messages.
-  - `internal_error_does_not_leak_detail_to_the_wire` — `Internal`'s inner string never reaches the wire message.
-- **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib error::`, then the full `--lib` suite.
-- **Result:** Pass — 5 new tests; full suite 57 → 62 passing, 0 failed.
-- **Commit hash:** `1e380d6`
-- **Push result:** Pushed to `origin/chore/repo-cleanup`.
+- **Files changed:** `src-tauri/src/error.rs`.
+- **Behavior covered:** The `{ kind, message }` wire format the frontend's `formatBackendError` consumes.
+- **Result:** Pass — 5 new tests; backend suite 57 → 62.
+- **Commit hash:** `1e380d6` · **Push result:** Pushed (merged to `main`).
 
-### Improvement 2 — `read_secs` corrupt-value fallback (Gap B)
+### Improvement 2 — `read_secs` corrupt-value fallback (Gap B) _(prior pass)_
 
-- **Files changed:** `src-tauri/src/commands/settings.rs` (added one test to `settings::tests`).
-- **Behavior covered:** `read_secs`'s fallback when the stored `auto_lock_secs` value exists but cannot be parsed as `u64`.
-- **New test case:** `get_falls_back_to_default_when_stored_value_is_not_a_number` — inserts a raw `'not-a-number'` row directly into the `settings` table, then asserts `get_settings_impl` returns `DEFAULT_AUTO_LOCK_SECS` instead of erroring.
-- **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib settings::`, then the full `--lib` suite.
-- **Result:** Pass — 1 new test; full suite 62 → 63 passing, 0 failed.
-- **Commit hash:** `036afb8`
-- **Push result:** Pushed to `origin/chore/repo-cleanup`.
+- **Files changed:** `src-tauri/src/commands/settings.rs`.
+- **Behavior covered:** `read_secs` fallback when the stored value is non-numeric.
+- **Result:** Pass — 1 new test; backend suite 62 → 63.
+- **Commit hash:** `036afb8` · **Push result:** Pushed (merged to `main`).
 
-### Improvement 3 — category name length boundary (Gap C)
+### Improvement 3 — category name length boundary (Gap C) _(prior pass)_
 
-- **Files changed:** `src-tauri/src/commands/categories.rs` (added two tests to `categories::tests`).
-- **Behavior covered:** `validate_name`'s 64-character cap (`trimmed.len() > 64`).
-- **New test cases:**
-  - `create_rejects_name_longer_than_64_chars` — a 65-char name is rejected with a validation error.
-  - `create_accepts_name_of_exactly_64_chars` — a 64-char name is accepted and round-trips through the DB.
-- **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib categories::`, then the full `--lib` suite.
-- **Result:** Pass — 2 new tests; full suite 63 → 65 passing, 0 failed.
-- **Commit hash:** `983979d`
-- **Push result:** Pushed to `origin/chore/repo-cleanup`.
+- **Files changed:** `src-tauri/src/commands/categories.rs`.
+- **Behavior covered:** `validate_name`'s 64-character cap.
+- **Result:** Pass — 2 new tests; backend suite 63 → 65.
+- **Commit hash:** `983979d` · **Push result:** Pushed (merged to `main`).
+
+### Improvement 4 — `isBackendError` type guard (Gap F) _(this pass)_
+
+- _Pending implementation._
+
+### Improvement 5 — `filterEntries` boundary branches (Gap G) _(this pass)_
+
+- _Pending implementation._
+
+### Improvement 6 — `formatBackendError` edge branches (Gap H) _(this pass)_
+
+- _Pending implementation._
 
 ## 6. Skipped Opportunities
 
-- **`vault.rs` / `clipboard.rs` (Gaps D, E):** Both keep their logic inside `#[tauri::command]` functions bound to Tauri runtime types (`State`, `AppHandle`) rather than behind `*_impl(&AppState, …)` helpers. Testing them properly needs a small behavior-preserving extraction, which is a production change this test-only pass avoids. Recommended as a follow-up.
-- **Frontend services/components/guard** (`auto-lock`, `clipboard`, `category`, `settings`, `vault` services; `unlocked.guard`; feature components): these are thin wrappers around `call()` plus Angular signals, timers, and event listeners. The repo's established strategy is to test extracted pure functions, and the meaningful pure functions are already covered. Adding component-rendering/DI tests would introduce a new testing style for low marginal value, so it is intentionally out of scope here.
+- **`vault.rs` / `clipboard.rs` (Gaps D, E):** Both keep their logic inside `#[tauri::command]` functions bound to Tauri runtime types (`State`, `AppHandle`). Testing them properly needs a small behavior-preserving extraction, which is a production change these test-only passes avoid. Recommended as a follow-up.
+- **Frontend services / components / guard** (`auto-lock`, `clipboard`, `category`, `settings`, `vault` services; `unlocked.guard`; feature components): these are thin wrappers around `call()` plus Angular signals, timers, and event listeners. Some hold genuinely valuable validation logic (e.g. the settings auto-lock bounds check `secs < 30 || secs > 86400`, and `vault-unlock`'s `canCreate` requiring `length >= 8 && pw1 === pw2`), but that logic is embedded in non-exported component methods. Covering it would require either introducing Angular `TestBed` (a new testing style not used anywhere in this repo) or extracting the logic into exported pure functions (a production change). Both are out of scope for a test-only pass; flagged as a follow-up if component-level testing is later adopted.
 
 ## 7. Final Notes
 
-- The backend suite is the right place to add value: it holds the security-critical logic and has a clean, in-memory-DB testing pattern that new tests can follow exactly.
-- The three implemented improvements all guard previously-untested branches without touching production code; together they took the backend suite from 57 to 65 passing tests (+8), 0 failed.
-- The most valuable remaining follow-up is extracting `*_impl` helpers in `vault.rs` so the master-password and unlock paths can be unit-tested like the other command modules.
+- The backend suite remains the home of the security-critical logic and was strengthened in the prior pass (57 → 65 tests).
+- This frontend pass targets exported pure functions only — matching the repo's established strategy — and adds no production code or new test framework. It closes a genuinely overlooked gap (`isBackendError` had no direct tests) plus a handful of untested branches/boundaries in `filterEntries` and `formatBackendError`.
+- The most valuable remaining follow-ups are: (a) extracting `*_impl` helpers in `vault.rs` so the master-password/unlock paths can be unit-tested; and (b) deciding whether to extract the frontend component validation rules into pure functions so they too can be covered without `TestBed`.
