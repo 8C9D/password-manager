@@ -1,6 +1,47 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatBackendError } from './tauri-invoke';
+import { formatBackendError, isBackendError } from './tauri-invoke';
+
+describe('isBackendError', () => {
+  it('accepts a well-formed { kind, message } object', () => {
+    expect(isBackendError({ kind: 'locked', message: 'vault is locked' })).toBe(true);
+  });
+
+  it('accepts an object that also carries extra properties', () => {
+    expect(isBackendError({ kind: 'x', message: 'y', detail: 1 })).toBe(true);
+  });
+
+  it('rejects null and undefined', () => {
+    expect(isBackendError(null)).toBe(false);
+    expect(isBackendError(undefined)).toBe(false);
+  });
+
+  it('rejects primitives', () => {
+    expect(isBackendError('locked')).toBe(false);
+    expect(isBackendError(42)).toBe(false);
+    expect(isBackendError(true)).toBe(false);
+  });
+
+  it('rejects arrays', () => {
+    expect(isBackendError([])).toBe(false);
+    expect(isBackendError(['kind', 'message'])).toBe(false);
+  });
+
+  it('rejects objects missing either required key', () => {
+    expect(isBackendError({})).toBe(false);
+    expect(isBackendError({ kind: 'locked' })).toBe(false);
+    expect(isBackendError({ message: 'oops' })).toBe(false);
+  });
+
+  it('rejects a plain Error instance (it has message but no kind)', () => {
+    // This is why formatBackendError handles Error separately from BackendError.
+    expect(isBackendError(new Error('network down'))).toBe(false);
+  });
+
+  it('checks key presence, not value type (undefined values still match)', () => {
+    expect(isBackendError({ kind: undefined, message: undefined })).toBe(true);
+  });
+});
 
 describe('formatBackendError', () => {
   it('strips the "validation: " prefix on validation errors', () => {

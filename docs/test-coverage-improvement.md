@@ -130,7 +130,13 @@ Backend Gaps A–C were implemented in the prior pass. Gaps D and E remain defer
 
 ### Improvement 4 — `isBackendError` type guard (Gap F) _(this pass)_
 
-- _Pending implementation._
+- **Files changed:** `src/app/core/services/tauri-invoke.spec.ts` (added a `describe('isBackendError')` block).
+- **Behavior covered:** The exported type guard that decides whether an unknown thrown value is a structured `{ kind, message }` backend error — the predicate every `formatBackendError` call delegates to.
+- **New test cases:** well-formed object → `true`; object with extra props → `true`; `null`/`undefined` → `false`; primitives (`string`/`number`/`boolean`) → `false`; arrays → `false`; objects missing `kind` or `message` → `false`; a plain `Error` (has `message` but no `kind`) → `false`; and a documentation case showing the guard checks key *presence*, not value type.
+- **Validation run:** `npm test -- --watch=false`.
+- **Result:** Pass — 8 new tests; frontend suite 26 → 34 passing, 0 failed.
+- **Commit hash:** `PENDING_4`
+- **Push result:** PENDING.
 
 ### Improvement 5 — `filterEntries` boundary branches (Gap G) _(this pass)_
 
