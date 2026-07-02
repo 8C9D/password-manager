@@ -140,7 +140,13 @@ Backend Gaps A–C were implemented in the prior pass. Gaps D and E remain defer
 
 ### Improvement 5 — `filterEntries` boundary branches (Gap G) _(this pass)_
 
-- _Pending implementation._
+- **Files changed:** `src/app/core/services/password-entry.service.spec.ts` (added 3 cases to the `filterEntries` block).
+- **Behavior covered:** The collapsed-query branch (a whitespace-only query trims to `''` and behaves like "no query") and the empty-input boundary.
+- **New test cases:** whitespace-only query returns all entries; whitespace-only query still respects an active category filter (returns only that category); an empty `entries` array returns `[]` for both unfiltered and filtered calls.
+- **Validation run:** `npm test -- --watch=false`.
+- **Result:** Pass — 3 new tests; frontend suite 34 → 37 passing, 0 failed.
+- **Commit hash:** `PENDING_5`
+- **Push result:** PENDING.
 
 ### Improvement 6 — `formatBackendError` edge branches (Gap H) _(this pass)_
 

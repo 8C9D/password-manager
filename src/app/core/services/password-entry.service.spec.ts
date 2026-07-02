@@ -64,6 +64,19 @@ describe('filterEntries', () => {
     const result = filterEntries(SAMPLE, 10, '');
     expect(result.find((e) => e.id === 4)).toBeUndefined();
   });
+
+  it('treats a whitespace-only query as no query (returns everything)', () => {
+    expect(filterEntries(SAMPLE, null, '     ')).toHaveLength(4);
+  });
+
+  it('whitespace-only query still respects an active category filter', () => {
+    expect(filterEntries(SAMPLE, 10, '   ').map((e) => e.id)).toEqual([1, 3]);
+  });
+
+  it('returns empty for an empty entries array regardless of filters', () => {
+    expect(filterEntries([], null, '')).toEqual([]);
+    expect(filterEntries([], 10, 'github')).toEqual([]);
+  });
 });
 
 describe('validateEntryInput', () => {
