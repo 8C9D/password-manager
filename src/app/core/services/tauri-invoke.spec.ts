@@ -119,5 +119,20 @@ describe('formatBackendError', () => {
     expect(formatBackendError('weird')).toBe('weird');
     expect(formatBackendError(42)).toBe('42');
     expect(formatBackendError(null)).toBe('null');
+    expect(formatBackendError(undefined)).toBe('undefined');
+  });
+
+  it('strips the validation prefix even when no space follows the colon', () => {
+    // The \s* in /^validation:\s*/ means a space is optional.
+    expect(
+      formatBackendError({ kind: 'validation', message: 'validation:title is required' }),
+    ).toBe('title is required');
+  });
+
+  it('honors an empty-string override (blanks the message intentionally)', () => {
+    // An override of '' is distinct from "no override"; the guard is `!== undefined`.
+    expect(
+      formatBackendError({ kind: 'locked', message: 'vault is locked' }, { locked: '' }),
+    ).toBe('');
   });
 });

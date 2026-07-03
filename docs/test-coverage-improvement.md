@@ -150,7 +150,13 @@ Backend Gaps A–C were implemented in the prior pass. Gaps D and E remain defer
 
 ### Improvement 6 — `formatBackendError` edge branches (Gap H) _(this pass)_
 
-- _Pending implementation._
+- **Files changed:** `src/app/core/services/tauri-invoke.spec.ts` (2 new cases + `undefined` added to the coercion case).
+- **Behavior covered:** The `/^validation:\s*/` optional-space contract, the `!== undefined` override guard (empty string is a valid override), and `undefined` coercion.
+- **New test cases:** a no-space `validation:` message still strips to its body; an empty-string override blanks the message intentionally (distinct from "no override"); `undefined` coerces to `"undefined"`.
+- **Validation run:** `npm test -- --watch=false`.
+- **Result:** Pass — 2 new tests; frontend suite 37 → 39 passing, 0 failed.
+- **Commit hash:** `PENDING_6`
+- **Push result:** PENDING.
 
 ## 6. Skipped Opportunities
 
