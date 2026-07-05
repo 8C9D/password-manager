@@ -16,7 +16,7 @@ Existing tests at the time of this update:
 - **Frontend** — 2 spec files, both targeting *pure exported functions* rather than Angular DI/rendering:
   - `tauri-invoke.spec.ts` → `formatBackendError` (backend-error → user-message mapping)
   - `password-entry.service.spec.ts` → `filterEntries`, `validateEntryInput`
-  - Baseline run: `2 passed (2)` test files, `26 passed (26)` tests.
+  - This pass took the frontend suite from `26 passed (26)` to `39 passed (39)` tests across the same 2 files (+13: Gaps F/G/H).
 - **Backend** — 65 passing unit tests as of the prior pass (was 57; +8 from Gaps A/B/C below), across `commands/{entries,categories,generator,settings}`, `crypto/{aead,kdf}`, `db`, `state`, `error`.
 
 ## 2. Current Coverage Quality Summary
@@ -41,7 +41,7 @@ Remaining structural gaps are unchanged: modules reachable only through Tauri ru
 - **Suggested tests:** Direct boolean assertions for each shape in a new `describe('isBackendError')` block.
 - **Risk level:** Low (pure, no production change).
 - **Validation:** `npm test -- --watch=false`
-- **Status:** Planned
+- **Status:** Implemented (see §5, improvement 4)
 
 ### Gap G — `filterEntries` whitespace-only query and empty-input boundaries _(this pass)_
 
@@ -52,7 +52,7 @@ Remaining structural gaps are unchanged: modules reachable only through Tauri ru
 - **Suggested tests:** Two `filterEntries` cases covering the collapsed-query branch and the empty-input boundary.
 - **Risk level:** Low.
 - **Validation:** `npm test -- --watch=false`
-- **Status:** Planned
+- **Status:** Implemented (see §5, improvement 5)
 
 ### Gap H — `formatBackendError` prefix-regex and override edge branches _(this pass)_
 
@@ -63,7 +63,7 @@ Remaining structural gaps are unchanged: modules reachable only through Tauri ru
 - **Suggested tests:** Three additional `formatBackendError` cases.
 - **Risk level:** Low.
 - **Validation:** `npm test -- --watch=false`
-- **Status:** Planned
+- **Status:** Implemented (see §5, improvement 6)
 
 ### Gap A — `AppError` serialization contract (Rust → TypeScript) _(prior pass)_
 
@@ -135,8 +135,8 @@ Backend Gaps A–C were implemented in the prior pass. Gaps D and E remain defer
 - **New test cases:** well-formed object → `true`; object with extra props → `true`; `null`/`undefined` → `false`; primitives (`string`/`number`/`boolean`) → `false`; arrays → `false`; objects missing `kind` or `message` → `false`; a plain `Error` (has `message` but no `kind`) → `false`; and a documentation case showing the guard checks key *presence*, not value type.
 - **Validation run:** `npm test -- --watch=false`.
 - **Result:** Pass — 8 new tests; frontend suite 26 → 34 passing, 0 failed.
-- **Commit hash:** `PENDING_4`
-- **Push result:** PENDING.
+- **Commit hash:** `5484a43`
+- **Push result:** Pushed to `origin/main`.
 
 ### Improvement 5 — `filterEntries` boundary branches (Gap G) _(this pass)_
 
@@ -145,8 +145,8 @@ Backend Gaps A–C were implemented in the prior pass. Gaps D and E remain defer
 - **New test cases:** whitespace-only query returns all entries; whitespace-only query still respects an active category filter (returns only that category); an empty `entries` array returns `[]` for both unfiltered and filtered calls.
 - **Validation run:** `npm test -- --watch=false`.
 - **Result:** Pass — 3 new tests; frontend suite 34 → 37 passing, 0 failed.
-- **Commit hash:** `PENDING_5`
-- **Push result:** PENDING.
+- **Commit hash:** `63889e4`
+- **Push result:** Pushed to `origin/main`.
 
 ### Improvement 6 — `formatBackendError` edge branches (Gap H) _(this pass)_
 
@@ -155,8 +155,8 @@ Backend Gaps A–C were implemented in the prior pass. Gaps D and E remain defer
 - **New test cases:** a no-space `validation:` message still strips to its body; an empty-string override blanks the message intentionally (distinct from "no override"); `undefined` coerces to `"undefined"`.
 - **Validation run:** `npm test -- --watch=false`.
 - **Result:** Pass — 2 new tests; frontend suite 37 → 39 passing, 0 failed.
-- **Commit hash:** `PENDING_6`
-- **Push result:** PENDING.
+- **Commit hash:** `ac37b49`
+- **Push result:** Pushed to `origin/main`.
 
 ## 6. Skipped Opportunities
 
