@@ -1,6 +1,6 @@
 # Test Coverage Improvement Report
 
-_Originally generated 2026-05-28 on `chore/repo-cleanup` (backend pass). Updated 2026-05-29 on `main` for a frontend pass._
+_Originally generated 2026-05-28 on `chore/repo-cleanup` (backend pass). Updated 2026-05-29 on `main` for a frontend pass, then again 2026-05-29 for a backend boundary pass._
 
 ## 1. Repository Test Overview
 
@@ -29,6 +29,13 @@ The **prior pass closed the backend gaps** (§3 A–C, §5 improvements 1–3). 
 - `filterEntries` and `formatBackendError` each have a couple of **untested branches / boundaries** despite otherwise-thorough coverage (Gaps G, H).
 
 Remaining structural gaps are unchanged: modules reachable only through Tauri runtime types (`vault`, `clipboard` on the Rust side; thin signal/timer services and the guard on the TS side) would need a production refactor or a new component-testing style to unit-test, which these test-only passes avoid.
+
+**This backend boundary pass (2026-05-29)** re-audited the already-tested Rust command modules and found that two numeric range checks test only their *rejecting* side, not their *accepting* boundary — the same off-by-one risk that motivated the category 64-char test (Gap C), but left open in two other modules:
+
+- `update_settings_impl` rejects `29` and `86_401` but never confirms exactly `30` (MIN) and `86_400` (MAX) are *accepted* (Gap I).
+- `generate` rejects `257` and accepts lengths up to `128`, but never confirms exactly `256` (MAX) is *accepted* (Gap J). The MIN boundary `4` is already covered.
+
+Both are exact-boundary regressions: tightening a `<` to `<=` (or vice versa) would pass every existing test while silently rejecting a legitimate value. Both are closeable with test-only additions and zero production change.
 
 ## 3. Highest-Value Coverage Gaps
 
@@ -65,6 +72,28 @@ Remaining structural gaps are unchanged: modules reachable only through Tauri ru
 - **Validation:** `npm test -- --watch=false`
 - **Status:** Implemented (see §5, improvement 6)
 
+### Gap I — `update_settings_impl` accepting boundaries (auto-lock min/max) _(this pass)_
+
+- **Location:** `src-tauri/src/commands/settings.rs` (`update_settings_impl`, `MIN_AUTO_LOCK_SECS = 30`, `MAX_AUTO_LOCK_SECS = 86_400`)
+- **Why it matters:** The guard is `secs < MIN || secs > MAX`. The existing tests prove `29` and `86_401` are rejected, but nothing proves `30` and `86_400` are *accepted*. If someone "tidied" the comparison to `<=`/`>=`, the auto-lock UI's own min/max options would start failing validation and every existing test would still pass. The auto-lock timeout is a security control, so its exact accepted range is a contract worth pinning on both ends.
+- **Existing tests:** `update_rejects_value_below_minimum` (29), `update_rejects_value_above_maximum` (86_401), plus mid-range save/overwrite and locked-path tests.
+- **Missing cases:** exactly `30` is accepted and round-trips; exactly `86_400` is accepted and round-trips.
+- **Suggested tests:** Two tests mirroring the existing reject pair — `update_accepts_value_at_minimum_boundary` and `update_accepts_value_at_maximum_boundary`.
+- **Risk level:** Low (pure boundary assertions, no production change).
+- **Validation:** `cargo test --manifest-path src-tauri/Cargo.toml --lib settings`
+- **Status:** Planned
+
+### Gap J — `generate` accepting MAX length boundary _(this pass)_
+
+- **Location:** `src-tauri/src/commands/generator.rs` (`generate`, `MIN_LEN = 4`, `MAX_LEN = 256`)
+- **Why it matters:** The guard is `length < MIN_LEN || length > MAX_LEN`. `rejects_length_outside_range` covers `3` and `257`, and `returns_password_of_requested_length` covers `[4, 8, 16, 24, 64, 128]` — so the MIN accept boundary (`4`) is pinned but the MAX accept boundary (`256`) is not. A regression to `>=` on the upper bound would reject the documented maximum length while every current test stays green.
+- **Existing tests:** `returns_password_of_requested_length` (up to 128), `rejects_length_outside_range` (3 and 257).
+- **Missing cases:** exactly `256` generates a password of length 256.
+- **Suggested tests:** One test `accepts_length_at_both_boundaries` asserting both `4` and `256` produce correctly-sized output (symmetric with `rejects_length_outside_range`).
+- **Risk level:** Low.
+- **Validation:** `cargo test --manifest-path src-tauri/Cargo.toml --lib generator`
+- **Status:** Planned
+
 ### Gap A — `AppError` serialization contract (Rust → TypeScript) _(prior pass)_
 
 - **Location:** `src-tauri/src/error.rs` (`impl Serialize for AppError`)
@@ -97,13 +126,18 @@ Remaining structural gaps are unchanged: modules reachable only through Tauri ru
 
 ## 4. Test Improvement Plan
 
-This pass implements the three Low-risk, zero-production-change **frontend** gaps, one commit each, validating after each with `npm test -- --watch=false`:
+**Backend boundary pass (2026-05-29, current):** two Low-risk, zero-production-change boundary gaps, one commit each, validating each with the targeted `cargo test … --lib <module>` then the full backend suite:
+
+1. **Gap I** — add accepting-boundary tests (`30`, `86_400`) to `update_settings_impl` in `settings.rs`.
+2. **Gap J** — add an accepting MAX-boundary test (`256`) to `generate` in `generator.rs`.
+
+**Frontend pass (earlier 2026-05-29):** three Low-risk, zero-production-change frontend gaps, validated with `npm test -- --watch=false`:
 
 1. **Gap F** — add a `describe('isBackendError')` block to `tauri-invoke.spec.ts`.
 2. **Gap G** — add whitespace-only-query and empty-input cases to `filterEntries` in `password-entry.service.spec.ts`.
 3. **Gap H** — add prefix-regex/override/coercion edge cases to `formatBackendError` in `tauri-invoke.spec.ts`.
 
-Backend Gaps A–C were implemented in the prior pass. Gaps D and E remain deferred because they require production refactors.
+Backend Gaps A–C were implemented in the original pass. Gaps D and E remain deferred because they require production refactors.
 
 ## 5. Implemented Test Improvements
 
