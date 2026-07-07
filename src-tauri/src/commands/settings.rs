@@ -125,6 +125,47 @@ mod tests {
     }
 
     #[test]
+    fn update_accepts_value_at_minimum_boundary() {
+        // The guard is `< MIN_AUTO_LOCK_SECS`, so the minimum itself must be
+        // accepted. The reject test above only proves MIN - 1 fails; tightening
+        // the comparison to `<=` would reject the documented minimum while every
+        // existing test stayed green. Assert it is accepted and round-trips.
+        let state = unlocked_state();
+        let saved = update_settings_impl(
+            &state,
+            Settings {
+                auto_lock_secs: MIN_AUTO_LOCK_SECS,
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.auto_lock_secs, MIN_AUTO_LOCK_SECS);
+        assert_eq!(
+            get_settings_impl(&state).unwrap().auto_lock_secs,
+            MIN_AUTO_LOCK_SECS
+        );
+    }
+
+    #[test]
+    fn update_accepts_value_at_maximum_boundary() {
+        // Mirror of the minimum case for the upper bound: the guard is
+        // `> MAX_AUTO_LOCK_SECS`, so the maximum (24h) must be accepted and
+        // round-trip. Guards against a `>=` regression on the upper bound.
+        let state = unlocked_state();
+        let saved = update_settings_impl(
+            &state,
+            Settings {
+                auto_lock_secs: MAX_AUTO_LOCK_SECS,
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.auto_lock_secs, MAX_AUTO_LOCK_SECS);
+        assert_eq!(
+            get_settings_impl(&state).unwrap().auto_lock_secs,
+            MAX_AUTO_LOCK_SECS
+        );
+    }
+
+    #[test]
     fn update_rejects_when_locked() {
         let state = locked_state();
         assert!(matches!(

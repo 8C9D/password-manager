@@ -81,7 +81,7 @@ Both are exact-boundary regressions: tightening a `<` to `<=` (or vice versa) wo
 - **Suggested tests:** Two tests mirroring the existing reject pair — `update_accepts_value_at_minimum_boundary` and `update_accepts_value_at_maximum_boundary`.
 - **Risk level:** Low (pure boundary assertions, no production change).
 - **Validation:** `cargo test --manifest-path src-tauri/Cargo.toml --lib settings`
-- **Status:** Planned
+- **Status:** Implemented (see §5, improvement 7)
 
 ### Gap J — `generate` accepting MAX length boundary _(this pass)_
 
@@ -190,6 +190,16 @@ Backend Gaps A–C were implemented in the original pass. Gaps D and E remain de
 - **Validation run:** `npm test -- --watch=false`.
 - **Result:** Pass — 2 new tests; frontend suite 37 → 39 passing, 0 failed.
 - **Commit hash:** `ac37b49`
+- **Push result:** Pushed to `origin/main`.
+
+### Improvement 7 — `update_settings_impl` accepting boundaries (Gap I) _(this pass)_
+
+- **Files changed:** `src-tauri/src/commands/settings.rs` (2 new tests).
+- **Behavior covered:** That the inclusive auto-lock range endpoints are *accepted* and round-trip — exactly `MIN_AUTO_LOCK_SECS` (30s) and exactly `MAX_AUTO_LOCK_SECS` (86_400s / 24h). The pre-existing tests only proved `29` and `86_401` are rejected, leaving a `<`→`<=` / `>`→`>=` regression undetectable.
+- **New test cases:** `update_accepts_value_at_minimum_boundary`; `update_accepts_value_at_maximum_boundary`. Both assert the saved value and a subsequent `get_settings_impl` round-trip equal the boundary, and use the named constants so the test pins the operator contract rather than a magic number.
+- **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib settings`, then the full `--lib` suite.
+- **Result:** Pass — 2 new tests; settings module 8 → 10, backend suite 65 → 67, 0 failed.
+- **Commit hash:** `<this commit>`
 - **Push result:** Pushed to `origin/main`.
 
 ## 6. Skipped Opportunities
