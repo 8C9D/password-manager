@@ -109,6 +109,24 @@ mod tests {
     }
 
     #[test]
+    fn accepts_length_at_both_boundaries() {
+        // Symmetric with `rejects_length_outside_range`, which pins MIN_LEN - 1
+        // (3) and MAX_LEN + 1 (257) as rejected. This pins the inclusive
+        // endpoints MIN_LEN (4) and MAX_LEN (256) as accepted: the guard is
+        // `length < MIN_LEN || length > MAX_LEN`, so a regression to `>= MAX_LEN`
+        // would reject the documented maximum while every other test stayed
+        // green (the existing length loop only goes up to 128).
+        for len in [MIN_LEN, MAX_LEN] {
+            let opts = GeneratorOptions {
+                length: len,
+                ..default_opts()
+            };
+            let pw = generate(&opts).unwrap();
+            assert_eq!(pw.chars().count(), len);
+        }
+    }
+
+    #[test]
     fn rejects_when_no_classes_selected() {
         let opts = GeneratorOptions {
             length: 16,

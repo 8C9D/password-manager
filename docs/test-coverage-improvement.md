@@ -92,7 +92,7 @@ Both are exact-boundary regressions: tightening a `<` to `<=` (or vice versa) wo
 - **Suggested tests:** One test `accepts_length_at_both_boundaries` asserting both `4` and `256` produce correctly-sized output (symmetric with `rejects_length_outside_range`).
 - **Risk level:** Low.
 - **Validation:** `cargo test --manifest-path src-tauri/Cargo.toml --lib generator`
-- **Status:** Planned
+- **Status:** Implemented (see §5, improvement 8)
 
 ### Gap A — `AppError` serialization contract (Rust → TypeScript) _(prior pass)_
 
@@ -199,6 +199,16 @@ Backend Gaps A–C were implemented in the original pass. Gaps D and E remain de
 - **New test cases:** `update_accepts_value_at_minimum_boundary`; `update_accepts_value_at_maximum_boundary`. Both assert the saved value and a subsequent `get_settings_impl` round-trip equal the boundary, and use the named constants so the test pins the operator contract rather than a magic number.
 - **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib settings`, then the full `--lib` suite.
 - **Result:** Pass — 2 new tests; settings module 8 → 10, backend suite 65 → 67, 0 failed.
+- **Commit hash:** `<improvement 7 commit>`
+- **Push result:** Pushed to `origin/main`.
+
+### Improvement 8 — `generate` accepting MAX length boundary (Gap J) _(this pass)_
+
+- **Files changed:** `src-tauri/src/commands/generator.rs` (1 new test).
+- **Behavior covered:** That the inclusive length endpoints `MIN_LEN` (4) and `MAX_LEN` (256) both produce a password of exactly that length. `rejects_length_outside_range` already pinned `3` and `257` as rejected, and the existing length loop only ran up to `128`, so the upper accept boundary (`256`) was unprotected against a `> MAX_LEN`→`>= MAX_LEN` regression.
+- **New test cases:** `accepts_length_at_both_boundaries` — loops over `[MIN_LEN, MAX_LEN]` and asserts the generated length, using the named constants for symmetry with the reject test.
+- **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib generator`, then the full `--lib` suite.
+- **Result:** Pass — 1 new test; generator module 7 → 8, backend suite 67 → 68, 0 failed.
 - **Commit hash:** `<this commit>`
 - **Push result:** Pushed to `origin/main`.
 
