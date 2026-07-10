@@ -17,7 +17,7 @@ Existing tests at the time of this update:
   - `tauri-invoke.spec.ts` → `formatBackendError` (backend-error → user-message mapping)
   - `password-entry.service.spec.ts` → `filterEntries`, `validateEntryInput`
   - This pass took the frontend suite from `26 passed (26)` to `39 passed (39)` tests across the same 2 files (+13: Gaps F/G/H).
-- **Backend** — 65 passing unit tests as of the prior pass (was 57; +8 from Gaps A/B/C below), across `commands/{entries,categories,generator,settings}`, `crypto/{aead,kdf}`, `db`, `state`, `error`.
+- **Backend** — 65 passing unit tests entering this pass (was 57; +8 from Gaps A/B/C below), across `commands/{entries,categories,generator,settings}`, `crypto/{aead,kdf}`, `db`, `state`, `error`. The current boundary pass took the backend suite from `65 passed` to `68 passed` (+3: Gaps I/J).
 
 ## 2. Current Coverage Quality Summary
 
@@ -199,7 +199,7 @@ Backend Gaps A–C were implemented in the original pass. Gaps D and E remain de
 - **New test cases:** `update_accepts_value_at_minimum_boundary`; `update_accepts_value_at_maximum_boundary`. Both assert the saved value and a subsequent `get_settings_impl` round-trip equal the boundary, and use the named constants so the test pins the operator contract rather than a magic number.
 - **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib settings`, then the full `--lib` suite.
 - **Result:** Pass — 2 new tests; settings module 8 → 10, backend suite 65 → 67, 0 failed.
-- **Commit hash:** `<improvement 7 commit>`
+- **Commit hash:** `82cf0b5`
 - **Push result:** Pushed to `origin/main`.
 
 ### Improvement 8 — `generate` accepting MAX length boundary (Gap J) _(this pass)_
@@ -209,16 +209,18 @@ Backend Gaps A–C were implemented in the original pass. Gaps D and E remain de
 - **New test cases:** `accepts_length_at_both_boundaries` — loops over `[MIN_LEN, MAX_LEN]` and asserts the generated length, using the named constants for symmetry with the reject test.
 - **Validation run:** `cargo test --manifest-path src-tauri/Cargo.toml --lib generator`, then the full `--lib` suite.
 - **Result:** Pass — 1 new test; generator module 7 → 8, backend suite 67 → 68, 0 failed.
-- **Commit hash:** `<this commit>`
+- **Commit hash:** `1586306`
 - **Push result:** Pushed to `origin/main`.
 
 ## 6. Skipped Opportunities
 
 - **`vault.rs` / `clipboard.rs` (Gaps D, E):** Both keep their logic inside `#[tauri::command]` functions bound to Tauri runtime types (`State`, `AppHandle`). Testing them properly needs a small behavior-preserving extraction, which is a production change these test-only passes avoid. Recommended as a follow-up.
 - **Frontend services / components / guard** (`auto-lock`, `clipboard`, `category`, `settings`, `vault` services; `unlocked.guard`; feature components): these are thin wrappers around `call()` plus Angular signals, timers, and event listeners. Some hold genuinely valuable validation logic (e.g. the settings auto-lock bounds check `secs < 30 || secs > 86400`, and `vault-unlock`'s `canCreate` requiring `length >= 8 && pw1 === pw2`), but that logic is embedded in non-exported component methods. Covering it would require either introducing Angular `TestBed` (a new testing style not used anywhere in this repo) or extracting the logic into exported pure functions (a production change). Both are out of scope for a test-only pass; flagged as a follow-up if component-level testing is later adopted.
+- **`vault_row_exists` (vault.rs) — considered and skipped this pass:** unlike the rest of `vault.rs` it already takes a plain `&Connection`, so it *is* directly testable without a refactor. But it is a one-line `SELECT COUNT(*) … > 0`; a direct test would exercise SQLite and the schema rather than application logic, and the security-relevant decisions it feeds (`VaultAlreadyExists` on create, `VaultNotFound` on unlock) live in the `#[tauri::command]` bodies that still need the Gap D extraction. Adding it would be low-value coverage, so it is intentionally left out.
+- **Per-command "locked" paths (entries/categories) — considered and skipped this pass:** e.g. dedicated `create_entry_rejects_when_locked` / `list_*_rejects_when_locked` tests. The lock gate is already proven at its source by `state.rs` (`with_unlocked_rejects_when_locked`, `with_authorized_rejects_when_locked`), with `get_entry_rejects_when_locked` as a representative end-to-end check. Replicating it per command would be redundant duplication that adds no new confidence.
 
 ## 7. Final Notes
 
-- The backend suite remains the home of the security-critical logic and was strengthened in the prior pass (57 → 65 tests).
-- This frontend pass targets exported pure functions only — matching the repo's established strategy — and adds no production code or new test framework. It closes a genuinely overlooked gap (`isBackendError` had no direct tests) plus a handful of untested branches/boundaries in `filterEntries` and `formatBackendError`.
-- The most valuable remaining follow-ups are: (a) extracting `*_impl` helpers in `vault.rs` so the master-password/unlock paths can be unit-tested; and (b) deciding whether to extract the frontend component validation rules into pure functions so they too can be covered without `TestBed`.
+- The backend suite remains the home of the security-critical logic and was strengthened across passes: 57 → 65 (Gaps A–C) → **68** (Gaps I/J, this pass). The frontend suite stands at 39 (Gaps F–H). Both suites are fully green.
+- This backend boundary pass adds no production code and no new framework. It closes two *accepting-boundary* gaps that the existing tests' rejecting-only assertions had left open (`update_settings_impl` at 30/86_400; `generate` at 256) — the same off-by-one class as the already-fixed category 64-char boundary.
+- The most valuable remaining follow-ups (all requiring a production change, hence still deferred) are: (a) extracting `*_impl` helpers in `vault.rs` so the master-password length checks and the wrong-password/already-exists paths can be unit-tested (Gap D); (b) extracting the clipboard auto-clear `clamp(1, 600)` + token-guard logic out of the `#[tauri::command]` body (Gap E); and (c) deciding whether to extract the frontend component validation rules into pure functions so they too can be covered without `TestBed`.
