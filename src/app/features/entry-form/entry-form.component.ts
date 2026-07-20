@@ -10,11 +10,17 @@ import {
 } from '../../core/services/password-entry.service';
 import { formatBackendError } from '../../core/services/tauri-invoke';
 import { PasswordGeneratorPanelComponent } from '../password-generator/password-generator-panel.component';
+import { PasswordStrengthMeterComponent } from '../password-strength/password-strength-meter.component';
 
 @Component({
   selector: 'app-entry-form',
   standalone: true,
-  imports: [FormsModule, RouterLink, PasswordGeneratorPanelComponent],
+  imports: [
+    FormsModule,
+    RouterLink,
+    PasswordGeneratorPanelComponent,
+    PasswordStrengthMeterComponent,
+  ],
   templateUrl: './entry-form.component.html',
   styleUrl: './entry-form.component.css',
 })

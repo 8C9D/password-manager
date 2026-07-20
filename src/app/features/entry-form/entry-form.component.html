@@ -54,6 +54,7 @@
           </button>
         </div>
       </label>
+      <app-password-strength-meter [password]="password" />
       @if (passwordTouched() && password === '') {
         <p class="warn">Password is required.</p>
       }

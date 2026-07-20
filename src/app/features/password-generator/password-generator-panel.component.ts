@@ -7,11 +7,12 @@ import {
 } from '../../core/models/generator.model';
 import { GeneratorService } from '../../core/services/generator.service';
 import { formatBackendError } from '../../core/services/tauri-invoke';
+import { PasswordStrengthMeterComponent } from '../password-strength/password-strength-meter.component';
 
 @Component({
   selector: 'app-password-generator-panel',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, PasswordStrengthMeterComponent],
   templateUrl: './password-generator-panel.component.html',
   styleUrl: './password-generator-panel.component.css',
 })

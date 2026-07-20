@@ -6,6 +6,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { SettingsService } from '../../core/services/settings.service';
 import { formatBackendError } from '../../core/services/tauri-invoke';
 import { VaultService } from '../../core/services/vault.service';
+import { PasswordStrengthMeterComponent } from '../password-strength/password-strength-meter.component';
 
 interface Preset {
   label: string;
@@ -23,7 +24,7 @@ const PRESETS: Preset[] = [
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [FormsModule, RouterLink],
+  imports: [FormsModule, RouterLink, PasswordStrengthMeterComponent],
   templateUrl: './settings.component.html',
   styleUrl: './settings.component.css',
 })

@@ -4,13 +4,14 @@ import { Router } from '@angular/router';
 
 import { formatBackendError } from '../../core/services/tauri-invoke';
 import { VaultService } from '../../core/services/vault.service';
+import { PasswordStrengthMeterComponent } from '../password-strength/password-strength-meter.component';
 
 type Mode = 'unknown' | 'create' | 'unlock';
 
 @Component({
   selector: 'app-vault-unlock',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, PasswordStrengthMeterComponent],
   templateUrl: './vault-unlock.component.html',
   styleUrl: './vault-unlock.component.css',
 })
