@@ -9,29 +9,45 @@ const DEFAULT_AUTO_LOCK_SECS: u64 = 300;
 const MIN_AUTO_LOCK_SECS: u64 = 30;
 const MAX_AUTO_LOCK_SECS: u64 = 86_400;
 
+pub(crate) const DEFAULT_CLIPBOARD_CLEAR_SECS: u64 = 15;
+pub(crate) const MIN_CLIPBOARD_CLEAR_SECS: u64 = 1;
+pub(crate) const MAX_CLIPBOARD_CLEAR_SECS: u64 = 600;
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub auto_lock_secs: u64,
+    pub clipboard_clear_secs: u64,
 }
 
-fn read_secs(conn: &rusqlite::Connection) -> Result<u64, AppError> {
-    let raw: Option<String> = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'auto_lock_secs'",
-            [],
-            |r| r.get::<_, String>(0),
-        )
-        .ok();
-    Ok(raw
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_AUTO_LOCK_SECS))
+fn read_u64_setting(conn: &rusqlite::Connection, key: &str, default: u64) -> u64 {
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        [key],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|s| s.parse::<u64>().ok())
+    .unwrap_or(default)
+}
+
+/// Stored clipboard auto-clear delay, used by copy_to_clipboard when the
+/// caller does not pass an explicit value.
+pub(crate) fn clipboard_clear_secs(conn: &rusqlite::Connection) -> u64 {
+    read_u64_setting(
+        conn,
+        "clipboard_clear_secs",
+        DEFAULT_CLIPBOARD_CLEAR_SECS,
+    )
+    .clamp(MIN_CLIPBOARD_CLEAR_SECS, MAX_CLIPBOARD_CLEAR_SECS)
 }
 
 fn get_settings_impl(state: &AppState) -> Result<Settings, AppError> {
     with_state(state, |s| {
-        let secs = read_secs(&s.conn)?;
-        Ok(Settings { auto_lock_secs: secs })
+        Ok(Settings {
+            auto_lock_secs: read_u64_setting(&s.conn, "auto_lock_secs", DEFAULT_AUTO_LOCK_SECS),
+            clipboard_clear_secs: clipboard_clear_secs(&s.conn),
+        })
     })
 }
 
@@ -41,14 +57,26 @@ fn update_settings_impl(state: &AppState, input: Settings) -> Result<Settings, A
             "auto-lock timeout must be between 30 seconds and 24 hours",
         ));
     }
+    if input.clipboard_clear_secs < MIN_CLIPBOARD_CLEAR_SECS
+        || input.clipboard_clear_secs > MAX_CLIPBOARD_CLEAR_SECS
+    {
+        return Err(AppError::Validation(
+            "clipboard clear delay must be between 1 and 600 seconds",
+        ));
+    }
     with_authorized(state, |s| {
         let now = now_iso8601();
-        s.conn.execute(
-            "INSERT INTO settings (key, value, updated_at) VALUES ('auto_lock_secs', ?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-            rusqlite::params![input.auto_lock_secs.to_string(), now],
-        )?;
-        Ok(Settings { auto_lock_secs: input.auto_lock_secs })
+        for (key, value) in [
+            ("auto_lock_secs", input.auto_lock_secs),
+            ("clipboard_clear_secs", input.clipboard_clear_secs),
+        ] {
+            s.conn.execute(
+                "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![key, value.to_string(), now],
+            )?;
+        }
+        Ok(input)
     })
 }
 
@@ -81,63 +109,69 @@ mod tests {
         state
     }
 
-    #[test]
-    fn get_returns_default_when_no_row_exists() {
-        let state = unlocked_state();
-        let settings = get_settings_impl(&state).unwrap();
-        assert_eq!(settings.auto_lock_secs, DEFAULT_AUTO_LOCK_SECS);
+    fn settings(auto_lock_secs: u64, clipboard_clear_secs: u64) -> Settings {
+        Settings {
+            auto_lock_secs,
+            clipboard_clear_secs,
+        }
     }
 
     #[test]
-    fn update_then_get_returns_saved_value() {
+    fn get_returns_defaults_when_no_rows_exist() {
         let state = unlocked_state();
-        let saved = update_settings_impl(&state, Settings { auto_lock_secs: 600 }).unwrap();
+        let s = get_settings_impl(&state).unwrap();
+        assert_eq!(s.auto_lock_secs, DEFAULT_AUTO_LOCK_SECS);
+        assert_eq!(s.clipboard_clear_secs, DEFAULT_CLIPBOARD_CLEAR_SECS);
+    }
+
+    #[test]
+    fn update_then_get_returns_saved_values() {
+        let state = unlocked_state();
+        let saved = update_settings_impl(&state, settings(600, 30)).unwrap();
         assert_eq!(saved.auto_lock_secs, 600);
+        assert_eq!(saved.clipboard_clear_secs, 30);
         let fetched = get_settings_impl(&state).unwrap();
         assert_eq!(fetched.auto_lock_secs, 600);
+        assert_eq!(fetched.clipboard_clear_secs, 30);
     }
 
     #[test]
-    fn update_overwrites_previous_value() {
+    fn update_overwrites_previous_values() {
         let state = unlocked_state();
-        update_settings_impl(&state, Settings { auto_lock_secs: 600 }).unwrap();
-        update_settings_impl(&state, Settings { auto_lock_secs: 900 }).unwrap();
+        update_settings_impl(&state, settings(600, 20)).unwrap();
+        update_settings_impl(&state, settings(900, 45)).unwrap();
         let fetched = get_settings_impl(&state).unwrap();
         assert_eq!(fetched.auto_lock_secs, 900);
+        assert_eq!(fetched.clipboard_clear_secs, 45);
     }
 
     #[test]
-    fn update_rejects_value_below_minimum() {
+    fn update_rejects_auto_lock_below_minimum() {
         let state = unlocked_state();
         assert!(matches!(
-            update_settings_impl(&state, Settings { auto_lock_secs: 29 }),
+            update_settings_impl(&state, settings(29, 15)),
             Err(AppError::Validation(_))
         ));
     }
 
     #[test]
-    fn update_rejects_value_above_maximum() {
+    fn update_rejects_auto_lock_above_maximum() {
         let state = unlocked_state();
         assert!(matches!(
-            update_settings_impl(&state, Settings { auto_lock_secs: 86_401 }),
+            update_settings_impl(&state, settings(86_401, 15)),
             Err(AppError::Validation(_))
         ));
     }
 
     #[test]
-    fn update_accepts_value_at_minimum_boundary() {
+    fn update_accepts_auto_lock_at_minimum_boundary() {
         // The guard is `< MIN_AUTO_LOCK_SECS`, so the minimum itself must be
         // accepted. The reject test above only proves MIN - 1 fails; tightening
         // the comparison to `<=` would reject the documented minimum while every
         // existing test stayed green. Assert it is accepted and round-trips.
         let state = unlocked_state();
-        let saved = update_settings_impl(
-            &state,
-            Settings {
-                auto_lock_secs: MIN_AUTO_LOCK_SECS,
-            },
-        )
-        .unwrap();
+        let saved =
+            update_settings_impl(&state, settings(MIN_AUTO_LOCK_SECS, 15)).unwrap();
         assert_eq!(saved.auto_lock_secs, MIN_AUTO_LOCK_SECS);
         assert_eq!(
             get_settings_impl(&state).unwrap().auto_lock_secs,
@@ -146,18 +180,13 @@ mod tests {
     }
 
     #[test]
-    fn update_accepts_value_at_maximum_boundary() {
+    fn update_accepts_auto_lock_at_maximum_boundary() {
         // Mirror of the minimum case for the upper bound: the guard is
         // `> MAX_AUTO_LOCK_SECS`, so the maximum (24h) must be accepted and
         // round-trip. Guards against a `>=` regression on the upper bound.
         let state = unlocked_state();
-        let saved = update_settings_impl(
-            &state,
-            Settings {
-                auto_lock_secs: MAX_AUTO_LOCK_SECS,
-            },
-        )
-        .unwrap();
+        let saved =
+            update_settings_impl(&state, settings(MAX_AUTO_LOCK_SECS, 15)).unwrap();
         assert_eq!(saved.auto_lock_secs, MAX_AUTO_LOCK_SECS);
         assert_eq!(
             get_settings_impl(&state).unwrap().auto_lock_secs,
@@ -166,10 +195,54 @@ mod tests {
     }
 
     #[test]
+    fn update_rejects_clipboard_clear_below_minimum() {
+        let state = unlocked_state();
+        assert!(matches!(
+            update_settings_impl(&state, settings(300, MIN_CLIPBOARD_CLEAR_SECS - 1)),
+            Err(AppError::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn update_rejects_clipboard_clear_above_maximum() {
+        let state = unlocked_state();
+        assert!(matches!(
+            update_settings_impl(&state, settings(300, MAX_CLIPBOARD_CLEAR_SECS + 1)),
+            Err(AppError::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn update_accepts_clipboard_clear_at_minimum_boundary() {
+        // Same boundary contract as auto-lock: 1 second is documented as valid
+        // and must round-trip, so a `<=` regression cannot slip through.
+        let state = unlocked_state();
+        let saved =
+            update_settings_impl(&state, settings(300, MIN_CLIPBOARD_CLEAR_SECS)).unwrap();
+        assert_eq!(saved.clipboard_clear_secs, MIN_CLIPBOARD_CLEAR_SECS);
+        assert_eq!(
+            get_settings_impl(&state).unwrap().clipboard_clear_secs,
+            MIN_CLIPBOARD_CLEAR_SECS
+        );
+    }
+
+    #[test]
+    fn update_accepts_clipboard_clear_at_maximum_boundary() {
+        let state = unlocked_state();
+        let saved =
+            update_settings_impl(&state, settings(300, MAX_CLIPBOARD_CLEAR_SECS)).unwrap();
+        assert_eq!(saved.clipboard_clear_secs, MAX_CLIPBOARD_CLEAR_SECS);
+        assert_eq!(
+            get_settings_impl(&state).unwrap().clipboard_clear_secs,
+            MAX_CLIPBOARD_CLEAR_SECS
+        );
+    }
+
+    #[test]
     fn update_rejects_when_locked() {
         let state = locked_state();
         assert!(matches!(
-            update_settings_impl(&state, Settings { auto_lock_secs: 600 }),
+            update_settings_impl(&state, settings(600, 15)),
             Err(AppError::Locked)
         ));
     }
@@ -177,15 +250,16 @@ mod tests {
     #[test]
     fn get_allowed_while_locked() {
         let state = locked_state();
-        let settings = get_settings_impl(&state).unwrap();
-        assert_eq!(settings.auto_lock_secs, DEFAULT_AUTO_LOCK_SECS);
+        let s = get_settings_impl(&state).unwrap();
+        assert_eq!(s.auto_lock_secs, DEFAULT_AUTO_LOCK_SECS);
+        assert_eq!(s.clipboard_clear_secs, DEFAULT_CLIPBOARD_CLEAR_SECS);
     }
 
     #[test]
     fn get_falls_back_to_default_when_stored_value_is_not_a_number() {
         let state = unlocked_state();
         // Simulate a corrupt or hand-edited row whose value can't parse as u64.
-        // `read_secs` must fall back to the default rather than panic or yield
+        // The read must fall back to the default rather than panic or yield
         // a garbage timeout that would weaken the auto-lock guarantee.
         {
             let guard = state.inner.lock().unwrap();
@@ -198,7 +272,27 @@ mod tests {
                 )
                 .unwrap();
         }
-        let settings = get_settings_impl(&state).unwrap();
-        assert_eq!(settings.auto_lock_secs, DEFAULT_AUTO_LOCK_SECS);
+        let s = get_settings_impl(&state).unwrap();
+        assert_eq!(s.auto_lock_secs, DEFAULT_AUTO_LOCK_SECS);
+    }
+
+    #[test]
+    fn stored_clipboard_clear_outside_range_is_clamped_on_read() {
+        // A hand-edited row must not produce a delay outside the documented
+        // range when consumed by copy_to_clipboard's default path.
+        let state = unlocked_state();
+        {
+            let guard = state.inner.lock().unwrap();
+            guard
+                .conn
+                .execute(
+                    "INSERT INTO settings (key, value, updated_at)
+                     VALUES ('clipboard_clear_secs', '9999', '2026-05-28T00:00:00Z')",
+                    [],
+                )
+                .unwrap();
+        }
+        let s = get_settings_impl(&state).unwrap();
+        assert_eq!(s.clipboard_clear_secs, MAX_CLIPBOARD_CLEAR_SECS);
     }
 }

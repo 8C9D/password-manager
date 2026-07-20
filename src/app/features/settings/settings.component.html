@@ -35,6 +35,21 @@
         />
       </label>
 
+      <h3>Clipboard</h3>
+      <p class="muted small">
+        Copied values are wiped from the clipboard after this many seconds (1–600).
+      </p>
+      <label class="custom">
+        Clear after (seconds)
+        <input
+          type="number"
+          [(ngModel)]="clipboardClearSecs"
+          min="1"
+          max="600"
+          name="clipboardClearSecs"
+        />
+      </label>
+
       @if (errorMsg()) {
         <p class="warn">{{ errorMsg() }}</p>
       }

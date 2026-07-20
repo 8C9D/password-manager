@@ -6,7 +6,9 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use crate::error::AppError;
 use crate::state::{with_state, AppState};
 
-const DEFAULT_CLEAR_SECS: u64 = 15;
+use super::settings::{
+    clipboard_clear_secs, MAX_CLIPBOARD_CLEAR_SECS, MIN_CLIPBOARD_CLEAR_SECS,
+};
 
 #[tauri::command]
 pub fn copy_to_clipboard(
@@ -15,7 +17,11 @@ pub fn copy_to_clipboard(
     value: String,
     clear_after_secs: Option<u64>,
 ) -> Result<u64, AppError> {
-    let secs = clear_after_secs.unwrap_or(DEFAULT_CLEAR_SECS).clamp(1, 600);
+    // An explicit argument wins; otherwise use the persisted setting.
+    let secs = match clear_after_secs {
+        Some(v) => v.clamp(MIN_CLIPBOARD_CLEAR_SECS, MAX_CLIPBOARD_CLEAR_SECS),
+        None => with_state(&state, |s| Ok(clipboard_clear_secs(&s.conn)))?,
+    };
 
     app.clipboard()
         .write_text(value.clone())

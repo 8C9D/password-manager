@@ -34,6 +34,7 @@ export class SettingsComponent implements OnInit {
 
   protected readonly presets = PRESETS;
   protected autoLockSecs = 300;
+  protected clipboardClearSecs = 15;
   protected readonly loading = signal(true);
   protected readonly busy = signal(false);
   protected readonly errorMsg = signal<string | null>(null);
@@ -52,6 +53,7 @@ export class SettingsComponent implements OnInit {
     try {
       const s = await this.settings.load();
       this.autoLockSecs = s.autoLockSecs;
+      this.clipboardClearSecs = s.clipboardClearSecs;
     } catch (e) {
       this.errorMsg.set(formatBackendError(e));
     } finally {
@@ -70,8 +72,17 @@ export class SettingsComponent implements OnInit {
       this.busy.set(false);
       return;
     }
+    const clearSecs = Math.floor(Number(this.clipboardClearSecs));
+    if (!Number.isFinite(clearSecs) || clearSecs < 1 || clearSecs > 600) {
+      this.errorMsg.set('Clipboard clear delay must be between 1 and 600 seconds.');
+      this.busy.set(false);
+      return;
+    }
     try {
-      await this.settings.update(secs);
+      await this.settings.update({
+        autoLockSecs: secs,
+        clipboardClearSecs: clearSecs,
+      });
       this.savedMsg.set('Settings saved.');
       setTimeout(() => this.savedMsg.set(null), 3000);
     } catch (e) {
