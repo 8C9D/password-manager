@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 
 import { SettingsService } from '../../core/services/settings.service';
 import { formatBackendError } from '../../core/services/tauri-invoke';
+import { VaultService } from '../../core/services/vault.service';
 
 interface Preset {
   label: string;
@@ -27,6 +28,7 @@ const PRESETS: Preset[] = [
 })
 export class SettingsComponent implements OnInit {
   private readonly settings = inject(SettingsService);
+  private readonly vault = inject(VaultService);
 
   protected readonly presets = PRESETS;
   protected autoLockSecs = 300;
@@ -34,6 +36,15 @@ export class SettingsComponent implements OnInit {
   protected readonly busy = signal(false);
   protected readonly errorMsg = signal<string | null>(null);
   protected readonly savedMsg = signal<string | null>(null);
+
+  protected currentPw = '';
+  protected newPw1 = '';
+  protected newPw2 = '';
+  protected readonly showCurrentPw = signal(false);
+  protected readonly showNewPw = signal(false);
+  protected readonly pwBusy = signal(false);
+  protected readonly pwErrorMsg = signal<string | null>(null);
+  protected readonly pwSavedMsg = signal<string | null>(null);
 
   async ngOnInit(): Promise<void> {
     try {
@@ -65,6 +76,39 @@ export class SettingsComponent implements OnInit {
       this.errorMsg.set(formatBackendError(e));
     } finally {
       this.busy.set(false);
+    }
+  }
+
+  protected canChangePassword(): boolean {
+    return (
+      this.currentPw.length > 0 &&
+      this.newPw1.length >= 8 &&
+      this.newPw1 === this.newPw2
+    );
+  }
+
+  protected async onChangePassword(): Promise<void> {
+    if (!this.canChangePassword() || this.pwBusy()) return;
+    this.pwBusy.set(true);
+    this.pwErrorMsg.set(null);
+    this.pwSavedMsg.set(null);
+    try {
+      await this.vault.changeMasterPassword(this.currentPw, this.newPw1);
+      this.currentPw = '';
+      this.newPw1 = '';
+      this.newPw2 = '';
+      this.showCurrentPw.set(false);
+      this.showNewPw.set(false);
+      this.pwSavedMsg.set('Master password changed.');
+      setTimeout(() => this.pwSavedMsg.set(null), 3000);
+    } catch (e) {
+      this.pwErrorMsg.set(
+        formatBackendError(e, {
+          wrong_password: 'Current password is incorrect.',
+        }),
+      );
+    } finally {
+      this.pwBusy.set(false);
     }
   }
 }

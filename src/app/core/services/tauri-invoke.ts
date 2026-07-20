@@ -19,6 +19,7 @@ export type TauriCommand =
   | 'create_vault'
   | 'unlock_vault'
   | 'lock_vault'
+  | 'change_master_password'
   | 'create_entry'
   | 'list_entries'
   | 'get_entry'

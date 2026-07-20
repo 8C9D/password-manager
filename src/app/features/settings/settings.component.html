@@ -47,5 +47,76 @@
         </button>
       </div>
     </section>
+
+    <section class="section">
+      <h3>Change master password</h3>
+      <p class="muted small">
+        Re-encrypts every entry with a key derived from the new password. This may take a moment.
+      </p>
+      <form (ngSubmit)="onChangePassword()" class="pw-form">
+        <label>
+          Current password
+          <div class="pw-row">
+            <input
+              [type]="showCurrentPw() ? 'text' : 'password'"
+              name="currentPw"
+              [(ngModel)]="currentPw"
+              autocomplete="current-password"
+              required
+            />
+            <button type="button" class="btn small" (click)="showCurrentPw.set(!showCurrentPw())">
+              {{ showCurrentPw() ? 'Hide' : 'Show' }}
+            </button>
+          </div>
+        </label>
+        <label>
+          New password
+          <div class="pw-row">
+            <input
+              [type]="showNewPw() ? 'text' : 'password'"
+              name="newPw1"
+              [(ngModel)]="newPw1"
+              autocomplete="new-password"
+              minlength="8"
+              required
+            />
+            <button type="button" class="btn small" (click)="showNewPw.set(!showNewPw())">
+              {{ showNewPw() ? 'Hide' : 'Show' }}
+            </button>
+          </div>
+        </label>
+        <label>
+          Confirm new password
+          <input
+            [type]="showNewPw() ? 'text' : 'password'"
+            name="newPw2"
+            [(ngModel)]="newPw2"
+            autocomplete="new-password"
+            required
+          />
+        </label>
+        @if (newPw1.length > 0 && newPw1.length < 8) {
+          <p class="warn">Use at least 8 characters.</p>
+        }
+        @if (newPw1 && newPw2 && newPw1 !== newPw2) {
+          <p class="warn">Passwords do not match.</p>
+        }
+        @if (pwErrorMsg()) {
+          <p class="warn">{{ pwErrorMsg() }}</p>
+        }
+        @if (pwSavedMsg()) {
+          <p class="ok">{{ pwSavedMsg() }}</p>
+        }
+        <div class="actions">
+          <button
+            type="submit"
+            class="btn primary"
+            [disabled]="!canChangePassword() || pwBusy()"
+          >
+            {{ pwBusy() ? 'Changing…' : 'Change password' }}
+          </button>
+        </div>
+      </form>
+    </section>
   }
 </div>

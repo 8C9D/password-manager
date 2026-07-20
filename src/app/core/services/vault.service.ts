@@ -27,6 +27,13 @@ export class VaultService {
     await this.refreshStatus();
   }
 
+  async changeMasterPassword(
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<void> {
+    await call<void>('change_master_password', { currentPassword, newPassword });
+  }
+
   async lock(): Promise<void> {
     await call<void>('lock_vault');
     await this.refreshStatus();

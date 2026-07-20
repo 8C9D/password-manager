@@ -31,6 +31,7 @@ pub fn run() {
             commands::vault::create_vault,
             commands::vault::unlock_vault,
             commands::vault::lock_vault,
+            commands::vault::change_master_password,
             commands::entries::create_entry,
             commands::entries::list_entries,
             commands::entries::get_entry,

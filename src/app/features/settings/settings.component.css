@@ -20,6 +20,37 @@
   flex-direction: column;
   gap: 0.6rem;
 }
+.section + .section {
+  margin-top: 1.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+.pw-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.pw-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  max-width: 320px;
+}
+.pw-form input {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  flex: 1;
+}
+.pw-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
 .section h3 {
   margin: 0;
   font-size: 1rem;
