@@ -118,5 +118,67 @@
         </div>
       </form>
     </section>
+
+    <section class="section">
+      <h3>Export vault</h3>
+      <p class="muted small">
+        Saves an encrypted copy of all entries, categories, and settings. The file can only be
+        opened with the master password you enter here.
+      </p>
+      <form (ngSubmit)="onExport()" class="pw-form">
+        <label>
+          Master password
+          <input
+            type="password"
+            name="exportPw"
+            [(ngModel)]="exportPw"
+            autocomplete="current-password"
+            required
+          />
+        </label>
+        @if (exportErrorMsg()) {
+          <p class="warn">{{ exportErrorMsg() }}</p>
+        }
+        @if (exportSavedMsg()) {
+          <p class="ok">{{ exportSavedMsg() }}</p>
+        }
+        <div class="actions">
+          <button type="submit" class="btn primary" [disabled]="!exportPw || exportBusy()">
+            {{ exportBusy() ? 'Exporting…' : 'Export…' }}
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <section class="section">
+      <h3>Import</h3>
+      <p class="muted small">
+        Merges entries and categories from an encrypted export file into this vault. Existing
+        entries are never changed; imported duplicates appear alongside them.
+      </p>
+      <form (ngSubmit)="onImport()" class="pw-form">
+        <label>
+          Export file password
+          <input
+            type="password"
+            name="importPw"
+            [(ngModel)]="importPw"
+            autocomplete="off"
+            required
+          />
+        </label>
+        @if (importErrorMsg()) {
+          <p class="warn">{{ importErrorMsg() }}</p>
+        }
+        @if (importSavedMsg()) {
+          <p class="ok">{{ importSavedMsg() }}</p>
+        }
+        <div class="actions">
+          <button type="submit" class="btn primary" [disabled]="!importPw || importBusy()">
+            {{ importBusy() ? 'Importing…' : 'Choose file and import…' }}
+          </button>
+        </div>
+      </form>
+    </section>
   }
 </div>

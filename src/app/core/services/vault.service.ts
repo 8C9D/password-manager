@@ -38,4 +38,17 @@ export class VaultService {
     await call<void>('lock_vault');
     await this.refreshStatus();
   }
+
+  async exportVault(masterPassword: string, path: string): Promise<void> {
+    await call<void>('export_vault', { masterPassword, path });
+  }
+
+  async importVault(path: string, password: string): Promise<ImportSummary> {
+    return call<ImportSummary>('import_vault', { path, password });
+  }
+}
+
+export interface ImportSummary {
+  entriesImported: number;
+  categoriesCreated: number;
 }

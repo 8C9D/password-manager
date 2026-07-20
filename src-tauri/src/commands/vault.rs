@@ -99,7 +99,9 @@ pub fn create_vault(
 /// (kdf_salt, encrypted_test_value, test_value_nonce)
 type VaultCryptoRow = (Vec<u8>, Vec<u8>, Vec<u8>);
 
-fn read_vault_crypto_row(conn: &rusqlite::Connection) -> Result<VaultCryptoRow, AppError> {
+pub(crate) fn read_vault_crypto_row(
+    conn: &rusqlite::Connection,
+) -> Result<VaultCryptoRow, AppError> {
     if !vault_row_exists(conn)? {
         return Err(AppError::VaultNotFound);
     }
@@ -115,7 +117,7 @@ fn read_vault_crypto_row(conn: &rusqlite::Connection) -> Result<VaultCryptoRow, 
 /// Derive a key from `password` with the vault's stored salt and verify it
 /// against the stored test value. Returns the key and the salt it was
 /// derived from.
-fn verify_password(
+pub(crate) fn verify_password(
     salt: &[u8],
     encrypted_test: &[u8],
     test_nonce: &[u8],

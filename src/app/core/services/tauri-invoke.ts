@@ -32,7 +32,9 @@ export type TauriCommand =
   | 'generate_password'
   | 'get_settings'
   | 'update_settings'
-  | 'copy_to_clipboard';
+  | 'copy_to_clipboard'
+  | 'export_vault'
+  | 'import_vault';
 
 export async function call<T>(
   command: TauriCommand,
