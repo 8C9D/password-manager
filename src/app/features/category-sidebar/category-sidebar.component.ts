@@ -1,7 +1,8 @@
-import { Component, inject, OnInit } from '@angular/core';
+import { Component, inject, OnInit, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import { CategoryService } from '../../core/services/category.service';
+import { formatBackendError } from '../../core/services/tauri-invoke';
 
 @Component({
   selector: 'app-category-sidebar',
@@ -13,8 +14,14 @@ import { CategoryService } from '../../core/services/category.service';
 export class CategorySidebarComponent implements OnInit {
   protected readonly categories = inject(CategoryService);
 
+  protected readonly errorMsg = signal<string | null>(null);
+
   async ngOnInit(): Promise<void> {
-    await this.categories.list();
+    try {
+      await this.categories.list();
+    } catch (e) {
+      this.errorMsg.set(formatBackendError(e));
+    }
   }
 
   protected select(id: number | null): void {

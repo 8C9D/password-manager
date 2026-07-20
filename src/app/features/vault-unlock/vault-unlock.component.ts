@@ -21,6 +21,7 @@ export class VaultUnlockComponent {
 
   protected pw1 = '';
   protected pw2 = '';
+  protected vaultName = '';
   protected readonly mode = signal<Mode>('unknown');
   protected readonly busy = signal(false);
   protected readonly errorMsg = signal<string | null>(null);
@@ -51,9 +52,11 @@ export class VaultUnlockComponent {
     this.busy.set(true);
     this.errorMsg.set(null);
     try {
-      await this.vault.createVault(this.pw1);
+      const name = this.vaultName.trim();
+      await this.vault.createVault(this.pw1, name === '' ? undefined : name);
       this.pw1 = '';
       this.pw2 = '';
+      this.vaultName = '';
       await this.router.navigate(['/vault']);
     } catch (e) {
       this.errorMsg.set(formatBackendError(e));

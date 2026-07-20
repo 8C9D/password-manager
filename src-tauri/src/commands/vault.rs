@@ -8,9 +8,11 @@ use crate::error::AppError;
 use crate::state::{with_state, AppState};
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VaultStatus {
     pub exists: bool,
     pub unlocked: bool,
+    pub vault_name: Option<String>,
 }
 
 fn vault_row_exists(conn: &rusqlite::Connection) -> Result<bool, AppError> {
@@ -24,9 +26,18 @@ fn vault_row_exists(conn: &rusqlite::Connection) -> Result<bool, AppError> {
 
 fn vault_status_impl(state: &AppState) -> Result<VaultStatus, AppError> {
     with_state(state, |s| {
+        let vault_name: Option<String> = s
+            .conn
+            .query_row(
+                "SELECT vault_name FROM vault_metadata WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
         Ok(VaultStatus {
-            exists: vault_row_exists(&s.conn)?,
+            exists: vault_name.is_some(),
             unlocked: s.key.is_some(),
+            vault_name,
         })
     })
 }
@@ -394,6 +405,23 @@ mod tests {
         let status = vault_status_impl(&state).unwrap();
         assert!(status.exists);
         assert!(status.unlocked);
+        assert_eq!(status.vault_name.as_deref(), Some("My Vault"));
+    }
+
+    #[test]
+    fn status_reports_custom_vault_name() {
+        let state = AppState::new(db::open_in_memory().unwrap());
+        create_vault_impl(&state, PW_OLD.into(), Some("Family Passwords".into())).unwrap();
+        let status = vault_status_impl(&state).unwrap();
+        assert_eq!(status.vault_name.as_deref(), Some("Family Passwords"));
+    }
+
+    #[test]
+    fn status_reports_no_name_before_vault_exists() {
+        let state = AppState::new(db::open_in_memory().unwrap());
+        let status = vault_status_impl(&state).unwrap();
+        assert!(!status.exists);
+        assert!(status.vault_name.is_none());
     }
 
     #[test]
@@ -412,6 +440,69 @@ mod tests {
             unlock_vault_impl(&state, "wrong-password".into()),
             Err(AppError::WrongPassword)
         ));
+    }
+
+    #[test]
+    fn preexisting_v0_vault_file_unlocks_and_decrypts_after_upgrade() {
+        // Reproduce on disk exactly what the pre-migration build wrote:
+        // schema.sql applied directly, user_version left at 0, rows encrypted
+        // with the unchanged Argon2id/AES-GCM scheme. Opening it through the
+        // current open_and_migrate must adopt it losslessly.
+        let path = std::env::temp_dir().join(format!(
+            "pm-test-{}-preexisting-vault.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let salt = crypto::generate_salt();
+        let key = crypto::derive_key(PW_OLD, &salt).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(include_str!("../db/schema.sql")).unwrap();
+            let test_ct = crypto::encrypt(&key, TEST_VALUE_PLAINTEXT).unwrap();
+            conn.execute(
+                "INSERT INTO vault_metadata
+                    (id, vault_name, kdf_algorithm, kdf_salt,
+                     encrypted_test_value, test_value_nonce, created_at, updated_at)
+                 VALUES (1, 'Old Vault', 'argon2id', ?1, ?2, ?3,
+                         '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                rusqlite::params![salt.as_slice(), test_ct.bytes, test_ct.nonce.as_slice()],
+            )
+            .unwrap();
+            let pw_ct = crypto::encrypt(&key, b"hunter2").unwrap();
+            let notes_ct = crypto::encrypt(&key, b"old note").unwrap();
+            conn.execute(
+                "INSERT INTO password_entries
+                    (title, username, url_or_app_name,
+                     encrypted_password, password_nonce,
+                     encrypted_notes, notes_nonce, created_at, updated_at)
+                 VALUES ('GitHub', 'alice', 'github.com', ?1, ?2, ?3, ?4,
+                         '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                rusqlite::params![
+                    pw_ct.bytes,
+                    pw_ct.nonce.as_slice(),
+                    notes_ct.bytes,
+                    notes_ct.nonce.as_slice(),
+                ],
+            )
+            .unwrap();
+        }
+
+        let conn = crate::db::open_and_migrate(&path).unwrap();
+        let state = AppState::new(conn);
+        unlock_vault_impl(&state, PW_OLD.into()).unwrap();
+        let status = vault_status_impl(&state).unwrap();
+        assert!(status.unlocked);
+        assert_eq!(status.vault_name.as_deref(), Some("Old Vault"));
+        assert_eq!(
+            decrypt_entry(&state, 1),
+            ("hunter2".to_string(), Some("old note".to_string()))
+        );
+
+        drop(state);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(path.with_extension(format!("db{suffix}")));
+        }
     }
 
     #[test]

@@ -9,6 +9,16 @@
         <p>Set a master password to create your vault. You'll need it every time you unlock.</p>
         <form (ngSubmit)="onCreate()">
           <label>
+            Vault name (optional)
+            <input
+              type="text"
+              [(ngModel)]="vaultName"
+              name="vaultName"
+              autocomplete="off"
+              placeholder="My Vault"
+            />
+          </label>
+          <label>
             Master password
             <input
               type="password"

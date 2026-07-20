@@ -22,7 +22,7 @@ import { EntryListComponent } from '../entry-list/entry-list.component';
   styleUrl: './vault-layout.component.css',
 })
 export class VaultLayoutComponent {
-  private readonly vault = inject(VaultService);
+  protected readonly vault = inject(VaultService);
   private readonly router = inject(Router);
   protected readonly clipboard = inject(ClipboardService);
   protected readonly entries = inject(PasswordEntryService);

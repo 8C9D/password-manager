@@ -8,6 +8,9 @@
   >
     All entries
   </button>
+  @if (errorMsg()) {
+    <p class="warn">{{ errorMsg() }}</p>
+  }
   @for (c of categories.categories(); track c.id) {
     <button
       type="button"

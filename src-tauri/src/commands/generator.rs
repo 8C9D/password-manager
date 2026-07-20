@@ -48,18 +48,57 @@ pub fn build_pool(opts: &GeneratorOptions) -> Result<Vec<char>, AppError> {
     Ok(pool)
 }
 
+/// One pool per selected class, with ambiguous characters already removed.
+/// A class emptied by the ambiguous filter is dropped rather than required.
+fn class_pools(opts: &GeneratorOptions) -> Vec<Vec<char>> {
+    let selected: [(bool, &str); 4] = [
+        (opts.include_lowercase, LOWER),
+        (opts.include_uppercase, UPPER),
+        (opts.include_numbers, NUMBERS),
+        (opts.include_symbols, SYMBOLS),
+    ];
+    selected
+        .into_iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, chars)| {
+            let mut pool: Vec<char> = chars.chars().collect();
+            if opts.exclude_ambiguous {
+                pool.retain(|c| !AMBIGUOUS.contains(c));
+            }
+            pool
+        })
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
 pub fn generate(opts: &GeneratorOptions) -> Result<String, AppError> {
     if opts.length < MIN_LEN || opts.length > MAX_LEN {
         return Err(AppError::Validation("length must be between 4 and 256"));
     }
     let pool = build_pool(opts)?;
+    let required = class_pools(opts);
     let mut rng = OsRng;
-    let mut out = String::with_capacity(opts.length);
-    for _ in 0..opts.length {
-        let idx = rng.gen_range(0..pool.len());
-        out.push(pool[idx]);
+
+    // Rejection-sample so every selected class appears at least once while the
+    // distribution stays uniform over the accepted set. MIN_LEN (4) >= the
+    // number of classes, so a satisfying password always exists; the attempt
+    // cap is a safety net, not an expected path.
+    for _ in 0..10_000 {
+        let mut out = String::with_capacity(opts.length);
+        for _ in 0..opts.length {
+            let idx = rng.gen_range(0..pool.len());
+            out.push(pool[idx]);
+        }
+        if required
+            .iter()
+            .all(|p| out.chars().any(|c| p.contains(&c)))
+        {
+            return Ok(out);
+        }
     }
-    Ok(out)
+    Err(AppError::Internal(
+        "could not generate a password satisfying all character classes".into(),
+    ))
 }
 
 #[tauri::command]
@@ -166,6 +205,41 @@ mod tests {
         let pw = generate(&opts).unwrap();
         for c in pw.chars() {
             assert!(!AMBIGUOUS.contains(&c), "found ambiguous char {c:?}");
+        }
+    }
+
+    #[test]
+    fn every_selected_class_appears_at_least_once() {
+        // Repeat at the minimum length, where random omission of a class is
+        // by far the most likely; without the guarantee this fails almost
+        // always within 50 iterations.
+        for _ in 0..50 {
+            let opts = GeneratorOptions {
+                length: 4,
+                ..default_opts()
+            };
+            let pw = generate(&opts).unwrap();
+            assert!(pw.chars().any(|c| c.is_ascii_lowercase()), "no lowercase in {pw:?}");
+            assert!(pw.chars().any(|c| c.is_ascii_uppercase()), "no uppercase in {pw:?}");
+            assert!(pw.chars().any(|c| c.is_ascii_digit()), "no digit in {pw:?}");
+            assert!(
+                pw.chars().any(|c| SYMBOLS.contains(c)),
+                "no symbol in {pw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn class_guarantee_respects_exclude_ambiguous() {
+        for _ in 0..20 {
+            let opts = GeneratorOptions {
+                length: 4,
+                exclude_ambiguous: true,
+                ..default_opts()
+            };
+            let pw = generate(&opts).unwrap();
+            assert!(pw.chars().all(|c| !AMBIGUOUS.contains(&c)));
+            assert!(pw.chars().any(|c| c.is_ascii_digit()), "no digit in {pw:?}");
         }
     }
 

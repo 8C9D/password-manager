@@ -34,4 +34,5 @@ export interface EntryInput {
 export interface VaultStatus {
   exists: boolean;
   unlocked: boolean;
+  vaultName: string | null;
 }

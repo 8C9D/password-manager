@@ -5,6 +5,7 @@ import {
   DEFAULT_GENERATOR_OPTIONS,
   GeneratorOptions,
 } from '../../core/models/generator.model';
+import { ClipboardService } from '../../core/services/clipboard.service';
 import { GeneratorService } from '../../core/services/generator.service';
 import { formatBackendError } from '../../core/services/tauri-invoke';
 import { PasswordStrengthMeterComponent } from '../password-strength/password-strength-meter.component';
@@ -18,6 +19,7 @@ import { PasswordStrengthMeterComponent } from '../password-strength/password-st
 })
 export class PasswordGeneratorPanelComponent implements OnInit {
   private readonly generator = inject(GeneratorService);
+  private readonly clipboard = inject(ClipboardService);
 
   readonly accept = output<string>();
 
@@ -53,5 +55,15 @@ export class PasswordGeneratorPanelComponent implements OnInit {
 
   use(): void {
     if (this.current()) this.accept.emit(this.current());
+  }
+
+  async copy(): Promise<void> {
+    const pw = this.current();
+    if (!pw) return;
+    try {
+      await this.clipboard.copy(pw, 'generated password');
+    } catch (e) {
+      this.error.set(formatBackendError(e));
+    }
   }
 }

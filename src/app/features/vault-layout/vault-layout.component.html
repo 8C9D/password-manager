@@ -1,6 +1,6 @@
 <div class="layout">
   <header class="topbar">
-    <h1>Password Manager</h1>
+    <h1>{{ vault.status()?.vaultName || 'Password Manager' }}</h1>
     <input
       type="search"
       placeholder="Search title / username / URL"
