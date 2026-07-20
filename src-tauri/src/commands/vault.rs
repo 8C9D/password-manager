@@ -154,17 +154,31 @@ pub fn unlock_vault(
     unlock_vault_impl(&state, master_password)
 }
 
-fn lock_vault_impl(state: &AppState) -> Result<(), AppError> {
+/// Locks the vault and hands back the clipboard token (if any) so the caller
+/// can clear the OS clipboard when the last copy came from us.
+fn lock_vault_impl(state: &AppState) -> Result<Option<String>, AppError> {
     with_state(state, |s| {
         s.key = None;
-        s.clipboard_token = None;
-        Ok(())
+        Ok(s.clipboard_token.take())
     })
 }
 
 #[tauri::command]
-pub fn lock_vault(state: State<'_, AppState>) -> Result<(), AppError> {
-    lock_vault_impl(&state)
+pub fn lock_vault(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), AppError> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let token = lock_vault_impl(&state)?;
+    // Same safety check as the delayed clear in commands/clipboard.rs: only
+    // wipe the clipboard if it still holds the value we put there.
+    if let Some(token) = token {
+        let current = app.clipboard().read_text().ok();
+        if current.as_deref() == Some(token.as_str()) {
+            if let Err(e) = app.clipboard().clear() {
+                log::warn!("failed to clear clipboard on lock: {e}");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn change_master_password_impl(
@@ -398,6 +412,23 @@ mod tests {
             unlock_vault_impl(&state, "wrong-password".into()),
             Err(AppError::WrongPassword)
         ));
+    }
+
+    #[test]
+    fn lock_returns_clipboard_token_and_clears_state() {
+        let state = state_with_vault();
+        state.inner.lock().unwrap().clipboard_token = Some("copied-secret".into());
+        let token = lock_vault_impl(&state).unwrap();
+        assert_eq!(token.as_deref(), Some("copied-secret"));
+        let guard = state.inner.lock().unwrap();
+        assert!(guard.key.is_none());
+        assert!(guard.clipboard_token.is_none());
+    }
+
+    #[test]
+    fn lock_returns_no_token_when_nothing_was_copied() {
+        let state = state_with_vault();
+        assert!(lock_vault_impl(&state).unwrap().is_none());
     }
 
     #[test]
