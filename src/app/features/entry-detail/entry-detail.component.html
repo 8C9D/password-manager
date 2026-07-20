@@ -31,6 +31,12 @@
       <dt>URL / App</dt>
       <dd>
         <span class="value">{{ e.urlOrAppName || '—' }}</span>
+        @if (e.urlOrAppName) {
+          <button class="btn small" type="button" (click)="copy(e.urlOrAppName, 'URL')">Copy</button>
+        }
+        @if (openableUrl()) {
+          <button class="btn small" type="button" (click)="onOpenUrl()">Open</button>
+        }
       </dd>
 
       <dt>Password</dt>

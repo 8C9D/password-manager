@@ -1,13 +1,19 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, inject, OnDestroy, signal } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { openUrl } from '@tauri-apps/plugin-opener';
 
 import { EntryFull } from '../../core/models/entry.model';
 import { CategoryService } from '../../core/services/category.service';
 import { ClipboardService } from '../../core/services/clipboard.service';
 import { ConfirmService } from '../../core/services/confirm.service';
-import { PasswordEntryService } from '../../core/services/password-entry.service';
+import {
+  parseHttpUrl,
+  PasswordEntryService,
+} from '../../core/services/password-entry.service';
 import { formatBackendError } from '../../core/services/tauri-invoke';
+
+const REVEAL_HIDE_AFTER_MS = 30_000;
 
 @Component({
   selector: 'app-entry-detail',
@@ -16,7 +22,7 @@ import { formatBackendError } from '../../core/services/tauri-invoke';
   templateUrl: './entry-detail.component.html',
   styleUrl: './entry-detail.component.css',
 })
-export class EntryDetailComponent {
+export class EntryDetailComponent implements OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly entries = inject(PasswordEntryService);
@@ -28,6 +34,8 @@ export class EntryDetailComponent {
   protected readonly loading = signal(true);
   protected readonly error = signal<string | null>(null);
   protected readonly showPassword = signal(false);
+
+  private hideTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((params) => {
@@ -49,11 +57,23 @@ export class EntryDetailComponent {
     return cat?.name ?? null;
   }
 
+  ngOnDestroy(): void {
+    this.cancelAutoHide();
+  }
+
+  private cancelAutoHide(): void {
+    if (this.hideTimer !== null) {
+      clearTimeout(this.hideTimer);
+      this.hideTimer = null;
+    }
+  }
+
   private async load(id: number): Promise<void> {
     this.loading.set(true);
     this.error.set(null);
     this.entry.set(null);
     this.showPassword.set(false);
+    this.cancelAutoHide();
     try {
       const e = await this.entries.get(id);
       this.entry.set(e);
@@ -65,7 +85,30 @@ export class EntryDetailComponent {
   }
 
   protected toggleShow(): void {
+    this.cancelAutoHide();
     this.showPassword.update((v) => !v);
+    // A revealed password re-masks itself after a while.
+    if (this.showPassword()) {
+      this.hideTimer = setTimeout(() => {
+        this.showPassword.set(false);
+        this.hideTimer = null;
+      }, REVEAL_HIDE_AFTER_MS);
+    }
+  }
+
+  protected openableUrl(): string | null {
+    const e = this.entry();
+    return e ? parseHttpUrl(e.urlOrAppName) : null;
+  }
+
+  protected async onOpenUrl(): Promise<void> {
+    const url = this.openableUrl();
+    if (!url) return;
+    try {
+      await openUrl(url);
+    } catch (err) {
+      this.error.set(formatBackendError(err));
+    }
   }
 
   protected async copy(value: string, label: string): Promise<void> {

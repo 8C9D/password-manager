@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { EntrySummary } from '../models/entry.model';
-import { filterEntries, validateEntryInput } from './password-entry.service';
+import {
+  filterEntries,
+  parseHttpUrl,
+  sortEntries,
+  validateEntryInput,
+} from './password-entry.service';
 
 function makeEntry(overrides: Partial<EntrySummary>): EntrySummary {
   return {
@@ -113,5 +118,69 @@ describe('validateEntryInput', () => {
   it('accepts password that is whitespace (intentional — user might pick odd values)', () => {
     const result = validateEntryInput({ title: 'X', password: ' ' });
     expect(result.valid).toBe(true);
+  });
+});
+
+describe('sortEntries', () => {
+  const list: EntrySummary[] = [
+    makeEntry({
+      id: 1,
+      title: 'banana',
+      createdAt: '2026-01-02T00:00:00Z',
+      lastUsedAt: '2026-03-01T00:00:00Z',
+    }),
+    makeEntry({
+      id: 2,
+      title: 'Apple',
+      createdAt: '2026-01-03T00:00:00Z',
+      lastUsedAt: null,
+    }),
+    makeEntry({
+      id: 3,
+      title: 'cherry',
+      createdAt: '2026-01-01T00:00:00Z',
+      lastUsedAt: '2026-04-01T00:00:00Z',
+    }),
+  ];
+
+  it('sorts by title case-insensitively', () => {
+    expect(sortEntries(list, 'title').map((e) => e.id)).toEqual([2, 1, 3]);
+  });
+
+  it('sorts by most recently used, never-used entries last', () => {
+    expect(sortEntries(list, 'recently-used').map((e) => e.id)).toEqual([3, 1, 2]);
+  });
+
+  it('sorts by most recently created', () => {
+    expect(sortEntries(list, 'recently-created').map((e) => e.id)).toEqual([2, 1, 3]);
+  });
+
+  it('does not mutate the input array', () => {
+    const before = list.map((e) => e.id);
+    sortEntries(list, 'recently-used');
+    expect(list.map((e) => e.id)).toEqual(before);
+  });
+});
+
+describe('parseHttpUrl', () => {
+  it('accepts absolute http and https URLs', () => {
+    expect(parseHttpUrl('https://github.com/login')).toBe('https://github.com/login');
+    expect(parseHttpUrl('http://localhost:8080')).toBe('http://localhost:8080/');
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(parseHttpUrl('  https://example.com  ')).toBe('https://example.com/');
+  });
+
+  it('rejects bare hostnames and app names', () => {
+    expect(parseHttpUrl('github.com')).toBeNull();
+    expect(parseHttpUrl('1Password desktop app')).toBeNull();
+    expect(parseHttpUrl('')).toBeNull();
+  });
+
+  it('rejects non-http schemes', () => {
+    expect(parseHttpUrl('file:///etc/passwd')).toBeNull();
+    expect(parseHttpUrl('javascript:alert(1)')).toBeNull();
+    expect(parseHttpUrl('ftp://example.com')).toBeNull();
   });
 });

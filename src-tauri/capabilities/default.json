@@ -9,6 +9,7 @@
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-clear",
     "dialog:allow-save",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "opener:default"
   ]
 }

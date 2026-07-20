@@ -1,6 +1,8 @@
 <div class="list-container">
   @if (loading()) {
     <p class="muted">Loading…</p>
+  } @else if (errorMsg()) {
+    <p class="warn">{{ errorMsg() }}</p>
   } @else if (visible().length === 0) {
     @if (entries.entries().length === 0) {
       <div class="empty">
@@ -13,6 +15,16 @@
       </div>
     }
   } @else {
+    <div class="sort-bar">
+      <label class="sort">
+        Sort
+        <select name="sortMode" [ngModel]="sortMode()" (ngModelChange)="sortMode.set($event)">
+          <option value="title">Title</option>
+          <option value="recently-used">Recently used</option>
+          <option value="recently-created">Recently created</option>
+        </select>
+      </label>
+    </div>
     <ul>
       @for (entry of visible(); track entry.id) {
         <li>
@@ -23,6 +35,9 @@
             <span class="title">{{ entry.title }}</span>
             @if (entry.username) {
               <span class="sub">{{ entry.username }}</span>
+            }
+            @if (entry.urlOrAppName) {
+              <span class="sub url">{{ entry.urlOrAppName }}</span>
             }
           </a>
         </li>

@@ -57,6 +57,52 @@ export function filterEntries(
   });
 }
 
+export type EntrySortMode = 'title' | 'recently-used' | 'recently-created';
+
+export function sortEntries(
+  entries: readonly EntrySummary[],
+  mode: EntrySortMode,
+): EntrySummary[] {
+  const byTitle = (a: EntrySummary, b: EntrySummary) =>
+    a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
+  const sorted = [...entries];
+  switch (mode) {
+    case 'title':
+      sorted.sort(byTitle);
+      break;
+    case 'recently-used':
+      // Never-used entries sink to the bottom, alphabetically.
+      sorted.sort((a, b) => {
+        if (a.lastUsedAt === null && b.lastUsedAt === null) return byTitle(a, b);
+        if (a.lastUsedAt === null) return 1;
+        if (b.lastUsedAt === null) return -1;
+        return b.lastUsedAt.localeCompare(a.lastUsedAt) || byTitle(a, b);
+      });
+      break;
+    case 'recently-created':
+      sorted.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || byTitle(a, b));
+      break;
+  }
+  return sorted;
+}
+
+/**
+ * Returns a normalized URL string when the value parses as an absolute
+ * http(s) URL, otherwise null.
+ */
+export function parseHttpUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface EntryValidationResult {
   valid: boolean;
   errors: { field: 'title' | 'password'; message: string }[];

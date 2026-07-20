@@ -38,6 +38,35 @@ a.selected .sub {
   color: var(--accent-strong);
   opacity: 0.8;
 }
+.sort-bar {
+  padding: 0 1rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.25rem;
+}
+.sort {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.sort select {
+  flex: 1;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+.sub.url {
+  opacity: 0.8;
+}
+.warn {
+  color: var(--danger);
+  font-size: 0.85rem;
+  padding: 0 1rem;
+}
 .empty {
   padding: 1.5rem 1rem;
   text-align: center;
