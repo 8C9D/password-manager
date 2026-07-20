@@ -4,21 +4,258 @@ use rusqlite::Connection;
 
 use crate::error::AppError;
 
+/// Baseline schema, frozen at user_version 0. Never edit it for schema
+/// changes; add a numbered entry to `MIGRATIONS` instead.
 const SCHEMA: &str = include_str!("schema.sql");
 
+struct Migration {
+    version: i32,
+    sql: &'static str,
+}
+
+/// Ordered, append-only list of schema migrations. Each entry runs in its own
+/// transaction and bumps user_version on success.
+const MIGRATIONS: &[Migration] = &[];
+
+#[cfg(test)]
+const LATEST_VERSION: i32 = if MIGRATIONS.is_empty() {
+    0
+} else {
+    MIGRATIONS[MIGRATIONS.len() - 1].version
+};
+
+fn user_version(conn: &Connection) -> Result<i32, AppError> {
+    let v: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    Ok(v)
+}
+
+fn migrate(conn: &mut Connection, migrations: &[Migration]) -> Result<(), AppError> {
+    let latest = migrations.last().map(|m| m.version).unwrap_or(0);
+    let mut version = user_version(conn)?;
+    if version > latest {
+        return Err(AppError::Internal(format!(
+            "vault database version {version} is newer than this app supports ({latest})"
+        )));
+    }
+
+    // Version 0 covers both a fresh database and a pre-migration vault whose
+    // tables already exist: the baseline is idempotent (CREATE IF NOT EXISTS),
+    // so existing vaults are adopted without change.
+    if version == 0 {
+        conn.execute_batch(SCHEMA)?;
+    }
+
+    for m in migrations {
+        if m.version <= version {
+            continue;
+        }
+        if m.version != version + 1 {
+            return Err(AppError::Internal(format!(
+                "non-sequential migration: have version {version}, next is {}",
+                m.version
+            )));
+        }
+        let tx = conn.transaction()?;
+        tx.execute_batch(m.sql)?;
+        tx.pragma_update(None, "user_version", m.version)?;
+        tx.commit()?;
+        version = m.version;
+    }
+    Ok(())
+}
+
 pub fn open_and_migrate(path: &Path) -> Result<Connection, AppError> {
-    let conn = Connection::open(path)?;
-    conn.execute_batch(SCHEMA)?;
+    let mut conn = Connection::open(path)?;
+    migrate(&mut conn, MIGRATIONS)?;
     Ok(conn)
 }
 
 #[cfg(test)]
 pub fn open_in_memory() -> Result<Connection, AppError> {
-    let conn = Connection::open_in_memory()?;
-    conn.execute_batch(SCHEMA)?;
+    let mut conn = Connection::open_in_memory()?;
+    migrate(&mut conn, MIGRATIONS)?;
     Ok(conn)
 }
 
 pub fn now_iso8601() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh_conn() -> Connection {
+        Connection::open_in_memory().unwrap()
+    }
+
+    fn table_names(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<String>, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn fresh_db_reaches_latest_version() {
+        let mut conn = fresh_conn();
+        migrate(&mut conn, MIGRATIONS).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), LATEST_VERSION);
+        let tables = table_names(&conn);
+        for t in ["vault_metadata", "categories", "password_entries", "settings"] {
+            assert!(tables.iter().any(|n| n == t), "missing table {t}");
+        }
+    }
+
+    #[test]
+    fn migrate_is_idempotent() {
+        let mut conn = fresh_conn();
+        migrate(&mut conn, MIGRATIONS).unwrap();
+        migrate(&mut conn, MIGRATIONS).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), LATEST_VERSION);
+    }
+
+    #[test]
+    fn v0_db_with_data_migrates_losslessly() {
+        // Simulate a vault created by the pre-migration build: baseline schema,
+        // user_version 0, real rows in every table.
+        let mut conn = fresh_conn();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute(
+            "INSERT INTO vault_metadata
+                (id, vault_name, kdf_algorithm, kdf_salt,
+                 encrypted_test_value, test_value_nonce, created_at, updated_at)
+             VALUES (1, 'My Vault', 'argon2id', X'00112233445566778899AABBCCDDEEFF',
+                     X'DEADBEEF', X'000102030405060708090A0B',
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO categories (name, created_at, updated_at)
+             VALUES ('Work', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO password_entries
+                (category_id, title, username, url_or_app_name,
+                 encrypted_password, password_nonce, created_at, updated_at)
+             VALUES (1, 'GitHub', 'alice', 'github.com',
+                     X'CAFEBABE', X'000102030405060708090A0B',
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value, updated_at)
+             VALUES ('auto_lock_secs', '600', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(user_version(&conn).unwrap(), 0);
+
+        migrate(&mut conn, MIGRATIONS).unwrap();
+
+        assert_eq!(user_version(&conn).unwrap(), LATEST_VERSION);
+        let (name, salt): (String, Vec<u8>) = conn
+            .query_row(
+                "SELECT vault_name, kdf_salt FROM vault_metadata WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "My Vault");
+        assert_eq!(salt.len(), 16);
+        let title: String = conn
+            .query_row("SELECT title FROM password_entries WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(title, "GitHub");
+        let value: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'auto_lock_secs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "600");
+        let cat: String = conn
+            .query_row("SELECT name FROM categories WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cat, "Work");
+    }
+
+    #[test]
+    fn newer_db_version_is_refused() {
+        let mut conn = fresh_conn();
+        conn.pragma_update(None, "user_version", LATEST_VERSION + 1)
+            .unwrap();
+        let err = migrate(&mut conn, MIGRATIONS).unwrap_err();
+        assert!(matches!(err, AppError::Internal(_)));
+    }
+
+    #[test]
+    fn steps_apply_sequentially_and_set_version() {
+        let steps: &[Migration] = &[
+            Migration {
+                version: 1,
+                sql: "CREATE TABLE step_one (id INTEGER PRIMARY KEY);",
+            },
+            Migration {
+                version: 2,
+                sql: "ALTER TABLE step_one ADD COLUMN note TEXT;",
+            },
+        ];
+        let mut conn = fresh_conn();
+        migrate(&mut conn, steps).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), 2);
+        conn.execute("INSERT INTO step_one (id, note) VALUES (1, 'ok')", [])
+            .unwrap();
+    }
+
+    #[test]
+    fn already_applied_steps_are_skipped() {
+        let steps: &[Migration] = &[Migration {
+            version: 1,
+            sql: "CREATE TABLE only_once (id INTEGER PRIMARY KEY);",
+        }];
+        let mut conn = fresh_conn();
+        migrate(&mut conn, steps).unwrap();
+        // A second run must skip version 1; re-running the CREATE would fail.
+        migrate(&mut conn, steps).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), 1);
+    }
+
+    #[test]
+    fn failed_step_rolls_back_and_leaves_version_unchanged() {
+        let steps: &[Migration] = &[Migration {
+            version: 1,
+            sql: "CREATE TABLE half_done (id INTEGER PRIMARY KEY);
+                  CREATE TABLE half_done (id INTEGER PRIMARY KEY);",
+        }];
+        let mut conn = fresh_conn();
+        assert!(migrate(&mut conn, steps).is_err());
+        assert_eq!(user_version(&conn).unwrap(), 0);
+        assert!(
+            !table_names(&conn).iter().any(|n| n == "half_done"),
+            "partial migration must roll back"
+        );
+    }
+
+    #[test]
+    fn non_sequential_migration_list_is_refused() {
+        let steps: &[Migration] = &[Migration {
+            version: 2,
+            sql: "CREATE TABLE skipped (id INTEGER PRIMARY KEY);",
+        }];
+        let mut conn = fresh_conn();
+        let err = migrate(&mut conn, steps).unwrap_err();
+        assert!(matches!(err, AppError::Internal(_)));
+        assert_eq!(user_version(&conn).unwrap(), 0);
+    }
 }
