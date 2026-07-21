@@ -39,6 +39,7 @@ pub fn run() {
             commands::entries::get_entry,
             commands::entries::update_entry,
             commands::entries::delete_entry,
+            commands::entries::generate_totp,
             commands::categories::list_categories,
             commands::categories::create_category,
             commands::categories::update_category,

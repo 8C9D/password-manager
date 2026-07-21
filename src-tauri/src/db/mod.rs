@@ -15,7 +15,11 @@ struct Migration {
 
 /// Ordered, append-only list of schema migrations. Each entry runs in its own
 /// transaction and bumps user_version on success.
-const MIGRATIONS: &[Migration] = &[];
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    sql: "ALTER TABLE password_entries ADD COLUMN encrypted_totp BLOB;
+          ALTER TABLE password_entries ADD COLUMN totp_nonce BLOB;",
+}];
 
 #[cfg(test)]
 const LATEST_VERSION: i32 = if MIGRATIONS.is_empty() {
@@ -79,6 +83,11 @@ pub fn open_in_memory() -> Result<Connection, AppError> {
 
 pub fn now_iso8601() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+/// Current Unix time in whole seconds, for TOTP time-step counting.
+pub fn now_unix() -> u64 {
+    chrono::Utc::now().timestamp().max(0) as u64
 }
 
 #[cfg(test)]
