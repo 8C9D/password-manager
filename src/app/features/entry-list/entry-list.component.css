@@ -77,3 +77,7 @@ a.selected .sub {
 .small {
   font-size: 0.8rem;
 }
+.fav {
+  color: #e0a400;
+  font-size: 0.85em;
+}

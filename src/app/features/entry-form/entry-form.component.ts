@@ -6,6 +6,7 @@ import { Category } from '../../core/models/category.model';
 import { EntryInput } from '../../core/models/entry.model';
 import { CategoryService } from '../../core/services/category.service';
 import {
+  parseTagsInput,
   PasswordEntryService,
   totpActionFrom,
   validateEntryInput,
@@ -41,6 +42,8 @@ export class EntryFormComponent implements OnInit {
   protected totpSecret = '';
   protected removeTotp = false;
   protected hasExistingTotp = false;
+  protected favorite = false;
+  protected tagsInput = '';
 
   protected readonly busy = signal(false);
   protected readonly loading = signal(true);
@@ -74,6 +77,8 @@ export class EntryFormComponent implements OnInit {
         this.notes = full.notes ?? '';
         this.categoryId = full.categoryId;
         this.hasExistingTotp = full.hasTotp;
+        this.favorite = full.favorite;
+        this.tagsInput = full.tags.join(', ');
       }
     } catch (e) {
       this.errorMsg.set(formatBackendError(e));
@@ -112,6 +117,8 @@ export class EntryFormComponent implements OnInit {
         password: this.password,
         notes: this.notes === '' ? null : this.notes,
         totp: totpActionFrom(this.totpSecret, this.removeTotp),
+        favorite: this.favorite,
+        tags: parseTagsInput(this.tagsInput),
       };
       const id = this.editingId();
       if (id !== null) {

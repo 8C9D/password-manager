@@ -50,6 +50,11 @@ export class PasswordEntryService {
     return call<VaultHealth>('audit_vault');
   }
 
+  async setFavorite(id: number, favorite: boolean): Promise<void> {
+    await call<void>('set_favorite', { id, favorite });
+    await this.list();
+  }
+
   clear(): void {
     this.entries.set([]);
     this.searchQuery.set('');
@@ -68,9 +73,18 @@ export function filterEntries(
     return (
       e.title.toLowerCase().includes(q) ||
       e.username.toLowerCase().includes(q) ||
-      e.urlOrAppName.toLowerCase().includes(q)
+      e.urlOrAppName.toLowerCase().includes(q) ||
+      e.tags.some((t) => t.toLowerCase().includes(q))
     );
   });
+}
+
+/** Split a comma-separated tag input into trimmed, non-empty tag strings. */
+export function parseTagsInput(input: string): string[] {
+  return input
+    .split(',')
+    .map((t) => t.trim())
+    .filter((t) => t !== '');
 }
 
 export type EntrySortMode = 'title' | 'recently-used' | 'recently-created';
@@ -81,25 +95,28 @@ export function sortEntries(
 ): EntrySummary[] {
   const byTitle = (a: EntrySummary, b: EntrySummary) =>
     a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
-  const sorted = [...entries];
+  let cmp: (a: EntrySummary, b: EntrySummary) => number = byTitle;
   switch (mode) {
     case 'title':
-      sorted.sort(byTitle);
+      cmp = byTitle;
       break;
     case 'recently-used':
       // Never-used entries sink to the bottom, alphabetically.
-      sorted.sort((a, b) => {
+      cmp = (a, b) => {
         if (a.lastUsedAt === null && b.lastUsedAt === null) return byTitle(a, b);
         if (a.lastUsedAt === null) return 1;
         if (b.lastUsedAt === null) return -1;
         return b.lastUsedAt.localeCompare(a.lastUsedAt) || byTitle(a, b);
-      });
+      };
       break;
     case 'recently-created':
-      sorted.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || byTitle(a, b));
+      cmp = (a, b) => b.createdAt.localeCompare(a.createdAt) || byTitle(a, b);
       break;
   }
-  return sorted;
+  // Favorites always float to the top, then the chosen ordering applies.
+  return [...entries].sort(
+    (a, b) => Number(b.favorite) - Number(a.favorite) || cmp(a, b),
+  );
 }
 
 /**

@@ -32,6 +32,29 @@ pub struct EntryInput {
     pub notes: Option<String>,
     #[serde(default)]
     pub totp: TotpUpdate,
+    #[serde(default)]
+    pub favorite: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// Normalize tags: trim, drop blanks, and de-duplicate while preserving order.
+fn normalize_tags(tags: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    tags.iter()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .filter(|t| seen.insert(t.to_lowercase()))
+        .map(|t| t.to_string())
+        .collect()
+}
+
+fn tags_to_json(tags: &[String]) -> String {
+    serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn tags_from_json(raw: &str) -> Vec<String> {
+    serde_json::from_str(raw).unwrap_or_default()
 }
 
 #[derive(Serialize)]
@@ -45,6 +68,8 @@ pub struct EntrySummary {
     pub created_at: String,
     pub updated_at: String,
     pub last_used_at: Option<String>,
+    pub favorite: bool,
+    pub tags: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -61,6 +86,8 @@ pub struct EntryFull {
     pub updated_at: String,
     pub last_used_at: Option<String>,
     pub has_totp: bool,
+    pub favorite: bool,
+    pub tags: Vec<String>,
 }
 
 fn validate_input(input: &EntryInput) -> Result<(), AppError> {
@@ -114,6 +141,7 @@ fn create_entry_impl(state: &AppState, input: EntryInput) -> Result<i64, AppErro
             // On create, Keep and Clear both mean "no TOTP".
             _ => (None, None),
         };
+        let tags = tags_to_json(&normalize_tags(&input.tags));
         let now = now_iso8601();
         s.conn.execute(
             "INSERT INTO password_entries
@@ -121,8 +149,9 @@ fn create_entry_impl(state: &AppState, input: EntryInput) -> Result<i64, AppErro
                  encrypted_password, password_nonce,
                  encrypted_notes, notes_nonce,
                  encrypted_totp, totp_nonce,
+                 is_favorite, tags,
                  created_at, updated_at, last_used_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, NULL)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, NULL)",
             rusqlite::params![
                 input.category_id,
                 input.title.trim(),
@@ -134,6 +163,8 @@ fn create_entry_impl(state: &AppState, input: EntryInput) -> Result<i64, AppErro
                 notes_nonce,
                 totp_bytes,
                 totp_nonce,
+                input.favorite,
+                tags,
                 now,
             ],
         )?;
@@ -145,7 +176,7 @@ fn list_entries_impl(state: &AppState) -> Result<Vec<EntrySummary>, AppError> {
     with_authorized(state, |s| {
         let mut stmt = s.conn.prepare(
             "SELECT id, category_id, title, username, url_or_app_name,
-                    created_at, updated_at, last_used_at
+                    created_at, updated_at, last_used_at, is_favorite, tags
              FROM password_entries
              ORDER BY title COLLATE NOCASE ASC",
         )?;
@@ -160,6 +191,8 @@ fn list_entries_impl(state: &AppState) -> Result<Vec<EntrySummary>, AppError> {
                     created_at: r.get(5)?,
                     updated_at: r.get(6)?,
                     last_used_at: r.get(7)?,
+                    favorite: r.get(8)?,
+                    tags: tags_from_json(&r.get::<_, String>(9)?),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -193,6 +226,8 @@ struct EntryRow {
     created_at: String,
     updated_at: String,
     has_totp: bool,
+    favorite: bool,
+    tags: Vec<String>,
 }
 
 fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
@@ -204,7 +239,8 @@ fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
                         encrypted_password, password_nonce,
                         encrypted_notes, notes_nonce,
                         created_at, updated_at,
-                        encrypted_totp IS NOT NULL
+                        encrypted_totp IS NOT NULL,
+                        is_favorite, tags
                  FROM password_entries WHERE id = ?1",
                 [id],
                 |r| {
@@ -221,6 +257,8 @@ fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
                         created_at: r.get(9)?,
                         updated_at: r.get(10)?,
                         has_totp: r.get(11)?,
+                        favorite: r.get(12)?,
+                        tags: tags_from_json(&r.get::<_, String>(13)?),
                     })
                 },
             )
@@ -261,6 +299,8 @@ fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
             updated_at: row.updated_at,
             last_used_at: Some(now),
             has_totp: row.has_totp,
+            favorite: row.favorite,
+            tags: row.tags,
         })
     })
 }
@@ -271,6 +311,7 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
     with_unlocked(state, |s, key| {
         let pw_ct = crypto::encrypt(key, input.password.as_bytes())?;
         let (notes_bytes, notes_nonce) = encrypt_optional(key, input.notes.as_deref())?;
+        let tags = tags_to_json(&normalize_tags(&input.tags));
         let now = now_iso8601();
         let n = s.conn.execute(
             "UPDATE password_entries SET
@@ -282,8 +323,10 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
                 password_nonce = ?6,
                 encrypted_notes = ?7,
                 notes_nonce = ?8,
-                updated_at = ?9
-             WHERE id = ?10",
+                is_favorite = ?9,
+                tags = ?10,
+                updated_at = ?11
+             WHERE id = ?12",
             rusqlite::params![
                 input.category_id,
                 input.title.trim(),
@@ -293,6 +336,8 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
                 pw_ct.nonce.as_slice(),
                 notes_bytes,
                 notes_nonce,
+                input.favorite,
+                tags,
                 now,
                 id,
             ],
@@ -389,6 +434,28 @@ pub fn generate_totp(state: State<'_, AppState>, id: i64) -> Result<GeneratedTot
     generate_totp_impl(&state, id)
 }
 
+fn set_favorite_impl(state: &AppState, id: i64, favorite: bool) -> Result<(), AppError> {
+    with_authorized(state, |s| {
+        let n = s.conn.execute(
+            "UPDATE password_entries SET is_favorite = ?1 WHERE id = ?2",
+            rusqlite::params![favorite, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::EntryNotFound);
+        }
+        Ok(())
+    })
+}
+
+#[tauri::command]
+pub fn set_favorite(
+    state: State<'_, AppState>,
+    id: i64,
+    favorite: bool,
+) -> Result<(), AppError> {
+    set_favorite_impl(&state, id, favorite)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,6 +489,8 @@ mod tests {
             password: "hunter2".into(),
             notes: Some("the cake is a lie".into()),
             totp: TotpUpdate::Keep,
+            favorite: false,
+            tags: vec![],
         }
     }
 
@@ -552,6 +621,8 @@ mod tests {
                 notes: Some("rotated".into()),
                 category_id: None,
                 totp: TotpUpdate::Keep,
+                favorite: false,
+                tags: vec![],
             },
         )
         .unwrap();
@@ -754,5 +825,77 @@ mod tests {
             generate_totp_at(&state, id, 59),
             Err(AppError::Validation(_))
         ));
+    }
+
+    #[test]
+    fn normalize_tags_trims_dedups_and_drops_blanks() {
+        let out = normalize_tags(&[
+            "  work ".into(),
+            "Work".into(), // case-insensitive duplicate
+            "".into(),
+            "   ".into(),
+            "personal".into(),
+        ]);
+        assert_eq!(out, vec!["work".to_string(), "personal".to_string()]);
+    }
+
+    #[test]
+    fn create_stores_favorite_and_normalized_tags() {
+        let state = unlocked_state();
+        let id = create_entry_impl(
+            &state,
+            EntryInput {
+                favorite: true,
+                tags: vec!["Work".into(), "  ".into(), "work".into(), "email".into()],
+                ..sample_input()
+            },
+        )
+        .unwrap();
+        let full = get_entry_impl(&state, id).unwrap();
+        assert!(full.favorite);
+        assert_eq!(full.tags, vec!["Work".to_string(), "email".to_string()]);
+
+        let summary = list_entries_impl(&state).unwrap();
+        assert!(summary[0].favorite);
+        assert_eq!(summary[0].tags, vec!["Work".to_string(), "email".to_string()]);
+    }
+
+    #[test]
+    fn set_favorite_toggles_the_flag() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        assert!(!get_entry_impl(&state, id).unwrap().favorite);
+        set_favorite_impl(&state, id, true).unwrap();
+        assert!(get_entry_impl(&state, id).unwrap().favorite);
+        set_favorite_impl(&state, id, false).unwrap();
+        assert!(!get_entry_impl(&state, id).unwrap().favorite);
+    }
+
+    #[test]
+    fn set_favorite_reports_not_found_for_missing_entry() {
+        let state = unlocked_state();
+        assert!(matches!(
+            set_favorite_impl(&state, 9999, true),
+            Err(AppError::EntryNotFound)
+        ));
+    }
+
+    #[test]
+    fn update_changes_favorite_and_tags() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        update_entry_impl(
+            &state,
+            id,
+            EntryInput {
+                favorite: true,
+                tags: vec!["banking".into()],
+                ..sample_input()
+            },
+        )
+        .unwrap();
+        let full = get_entry_impl(&state, id).unwrap();
+        assert!(full.favorite);
+        assert_eq!(full.tags, vec!["banking".to_string()]);
     }
 }

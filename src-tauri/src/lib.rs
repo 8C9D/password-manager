@@ -40,6 +40,7 @@ pub fn run() {
             commands::entries::update_entry,
             commands::entries::delete_entry,
             commands::entries::generate_totp,
+            commands::entries::set_favorite,
             commands::health::audit_vault,
             commands::categories::list_categories,
             commands::categories::create_category,

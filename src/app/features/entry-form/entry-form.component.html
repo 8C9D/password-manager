@@ -37,6 +37,22 @@
       </label>
 
       <label>
+        Tags (comma-separated)
+        <input
+          type="text"
+          name="tags"
+          [(ngModel)]="tagsInput"
+          autocomplete="off"
+          placeholder="work, email, banking"
+        />
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" name="favorite" [(ngModel)]="favorite" />
+        Mark as favorite
+      </label>
+
+      <label>
         Password<span class="req">*</span>
         <div class="pw-row">
           <input

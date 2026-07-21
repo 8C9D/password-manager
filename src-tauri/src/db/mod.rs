@@ -15,11 +15,18 @@ struct Migration {
 
 /// Ordered, append-only list of schema migrations. Each entry runs in its own
 /// transaction and bumps user_version on success.
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: "ALTER TABLE password_entries ADD COLUMN encrypted_totp BLOB;
-          ALTER TABLE password_entries ADD COLUMN totp_nonce BLOB;",
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: "ALTER TABLE password_entries ADD COLUMN encrypted_totp BLOB;
+              ALTER TABLE password_entries ADD COLUMN totp_nonce BLOB;",
+    },
+    Migration {
+        version: 2,
+        sql: "ALTER TABLE password_entries ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0;
+              ALTER TABLE password_entries ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';",
+    },
+];
 
 #[cfg(test)]
 const LATEST_VERSION: i32 = if MIGRATIONS.is_empty() {

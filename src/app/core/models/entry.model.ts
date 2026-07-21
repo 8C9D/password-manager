@@ -7,6 +7,8 @@ export interface EntrySummary {
   createdAt: string;
   updatedAt: string;
   lastUsedAt: string | null;
+  favorite: boolean;
+  tags: string[];
 }
 
 export interface EntryFull {
@@ -21,6 +23,8 @@ export interface EntryFull {
   updatedAt: string;
   lastUsedAt: string | null;
   hasTotp: boolean;
+  favorite: boolean;
+  tags: string[];
 }
 
 /** How an entry write should treat the stored TOTP secret. */
@@ -37,6 +41,8 @@ export interface EntryInput {
   password: string;
   notes: string | null;
   totp?: TotpUpdate;
+  favorite?: boolean;
+  tags?: string[];
 }
 
 export interface GeneratedTotp {

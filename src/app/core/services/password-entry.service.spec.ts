@@ -6,6 +6,7 @@ import {
   filterEntries,
   formatTotpCode,
   parseHttpUrl,
+  parseTagsInput,
   sortEntries,
   totpActionFrom,
   validateEntryInput,
@@ -21,6 +22,8 @@ function makeEntry(overrides: Partial<EntrySummary>): EntrySummary {
     createdAt: '2026-05-17T00:00:00Z',
     updatedAt: '2026-05-17T00:00:00Z',
     lastUsedAt: null,
+    favorite: false,
+    tags: [],
     ...overrides,
   };
 }
@@ -238,5 +241,42 @@ describe('describeIssue', () => {
 
   it('returns an empty list when nothing is wrong', () => {
     expect(describeIssue(base)).toEqual([]);
+  });
+});
+
+describe('parseTagsInput', () => {
+  it('splits, trims, and drops empty tags', () => {
+    expect(parseTagsInput('work,  personal ,,  , email')).toEqual([
+      'work',
+      'personal',
+      'email',
+    ]);
+    expect(parseTagsInput('   ')).toEqual([]);
+    expect(parseTagsInput('')).toEqual([]);
+  });
+});
+
+describe('filterEntries with tags', () => {
+  it('matches entries by tag as well as title/username/url', () => {
+    const entries = [
+      makeEntry({ id: 1, title: 'GitHub', tags: ['dev', 'work'] }),
+      makeEntry({ id: 2, title: 'Bank', tags: ['finance'] }),
+    ];
+    expect(filterEntries(entries, null, 'work').map((e) => e.id)).toEqual([1]);
+  });
+});
+
+describe('sortEntries favorites', () => {
+  it('floats favorites to the top within the chosen order', () => {
+    const entries = [
+      makeEntry({ id: 1, title: 'Apple', favorite: false }),
+      makeEntry({ id: 2, title: 'Zebra', favorite: true }),
+      makeEntry({ id: 3, title: 'Mango', favorite: false }),
+    ];
+    expect(sortEntries(entries, 'title').map((e) => e.title)).toEqual([
+      'Zebra',
+      'Apple',
+      'Mango',
+    ]);
   });
 });

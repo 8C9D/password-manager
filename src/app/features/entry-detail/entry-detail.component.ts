@@ -172,6 +172,20 @@ export class EntryDetailComponent implements OnDestroy {
     await this.clipboard.copy(value, label);
   }
 
+  protected async toggleFavorite(): Promise<void> {
+    const e = this.entry();
+    if (!e) return;
+    const next = !e.favorite;
+    // Optimistic update; revert if the backend rejects it.
+    this.entry.set({ ...e, favorite: next });
+    try {
+      await this.entries.setFavorite(e.id, next);
+    } catch (err) {
+      this.entry.set({ ...e, favorite: e.favorite });
+      this.error.set(formatBackendError(err));
+    }
+  }
+
   protected mask(value: string): string {
     return '•'.repeat(Math.min(value.length, 24));
   }

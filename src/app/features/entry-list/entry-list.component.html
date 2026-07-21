@@ -32,7 +32,12 @@
             [routerLink]="['/vault', entry.id]"
             routerLinkActive="selected"
           >
-            <span class="title">{{ entry.title }}</span>
+            <span class="title">
+              @if (entry.favorite) {
+                <span class="fav" title="Favorite">★</span>
+              }
+              {{ entry.title }}
+            </span>
             @if (entry.username) {
               <span class="sub">{{ entry.username }}</span>
             }
