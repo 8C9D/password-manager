@@ -1,3 +1,4 @@
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -182,7 +183,7 @@ fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
                     })
                 },
             )
-            .ok();
+            .optional()?;
 
         let row = row.ok_or(AppError::EntryNotFound)?;
 
@@ -538,6 +539,29 @@ mod tests {
         assert!(matches!(
             get_entry_impl(&state, 1),
             Err(AppError::Locked)
+        ));
+    }
+
+    #[test]
+    fn get_entry_surfaces_db_error_rather_than_not_found() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        // Force a genuine DB-layer failure on the row read: with the table
+        // gone, query_row errors instead of returning "no rows". The old
+        // `.ok()` collapsed that into EntryNotFound, masking real corruption;
+        // `.optional()?` must surface it as a Database error.
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute("DROP TABLE password_entries", [])
+            .unwrap();
+        // Matched directly (not via unwrap_err) so we don't need Debug on
+        // EntryFull, which carries the decrypted password.
+        assert!(matches!(
+            get_entry_impl(&state, id),
+            Err(AppError::Database(_))
         ));
     }
 }
