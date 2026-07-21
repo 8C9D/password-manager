@@ -3,7 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 
 import { formatBackendError } from '../../core/services/tauri-invoke';
-import { VaultService } from '../../core/services/vault.service';
+import { canCreateVault, VaultService } from '../../core/services/vault.service';
 import { PasswordStrengthMeterComponent } from '../password-strength/password-strength-meter.component';
 
 type Mode = 'unknown' | 'create' | 'unlock';
@@ -44,7 +44,7 @@ export class VaultUnlockComponent {
   }
 
   protected canCreate(): boolean {
-    return this.pw1.length >= 8 && this.pw1 === this.pw2;
+    return canCreateVault(this.pw1, this.pw2);
   }
 
   protected async onCreate(): Promise<void> {

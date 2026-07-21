@@ -52,6 +52,14 @@ export class VaultService {
   }
 }
 
+/**
+ * Whether the create-vault form is valid: the master password is at least 8
+ * characters and the confirmation matches it exactly.
+ */
+export function canCreateVault(pw1: string, pw2: string): boolean {
+  return pw1.length >= 8 && pw1 === pw2;
+}
+
 export interface ImportSummary {
   entriesImported: number;
   categoriesCreated: number;

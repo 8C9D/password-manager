@@ -105,4 +105,27 @@ mod tests {
         let ct = encrypt(&key, b"x").unwrap();
         assert!(decrypt(&key, &ct.bytes, &[0u8; 8]).is_err());
     }
+
+    #[test]
+    fn round_trips_and_authenticates_many_random_inputs() {
+        use rand::{rngs::OsRng, Rng, RngCore};
+        for _ in 0..200 {
+            let mut key = [0u8; 32];
+            OsRng.fill_bytes(&mut key);
+            let len = OsRng.gen_range(0..512);
+            let mut pt = vec![0u8; len];
+            OsRng.fill_bytes(&mut pt);
+
+            let ct = encrypt(&key, &pt).unwrap();
+            assert_eq!(decrypt(&key, &ct.bytes, &ct.nonce).unwrap(), pt);
+
+            // Flipping any single ciphertext bit must break authentication.
+            if !ct.bytes.is_empty() {
+                let mut tampered = ct.bytes.clone();
+                let i = OsRng.gen_range(0..tampered.len());
+                tampered[i] ^= 1;
+                assert!(decrypt(&key, &tampered, &ct.nonce).is_err());
+            }
+        }
+    }
 }
