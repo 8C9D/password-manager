@@ -92,7 +92,7 @@ fn encrypt_optional(
 
 /// Parse a TOTP secret/URI, serialize the canonical config to JSON, and encrypt
 /// it with the vault key. The secret is only ever stored as ciphertext.
-fn encrypt_totp(key: &[u8; 32], value: &str) -> Result<(Vec<u8>, Vec<u8>), AppError> {
+pub(crate) fn encrypt_totp(key: &[u8; 32], value: &str) -> Result<(Vec<u8>, Vec<u8>), AppError> {
     let config = totp::parse_totp_input(value)?;
     let json = serde_json::to_vec(&config)
         .map_err(|_| AppError::Internal("failed to serialize TOTP config".into()))?;

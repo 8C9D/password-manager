@@ -46,9 +46,19 @@ export class VaultService {
   async importVault(path: string, password: string): Promise<ImportSummary> {
     return call<ImportSummary>('import_vault', { path, password });
   }
+
+  async importCsv(path: string): Promise<CsvImportSummary> {
+    return call<CsvImportSummary>('import_csv', { path });
+  }
 }
 
 export interface ImportSummary {
   entriesImported: number;
+  categoriesCreated: number;
+}
+
+export interface CsvImportSummary {
+  imported: number;
+  skipped: number;
   categoriesCreated: number;
 }

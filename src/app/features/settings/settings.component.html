@@ -196,5 +196,25 @@
         </div>
       </form>
     </section>
+
+    <section class="section">
+      <h3>Import from CSV</h3>
+      <p class="muted small">
+        Import a plaintext CSV exported from Bitwarden, 1Password, or Chrome. Columns are matched by
+        name (title, username, password, URL, notes, folder, TOTP). Rows without a password are
+        skipped. Existing entries are never changed.
+      </p>
+      @if (csvErrorMsg()) {
+        <p class="warn">{{ csvErrorMsg() }}</p>
+      }
+      @if (csvSavedMsg()) {
+        <p class="ok">{{ csvSavedMsg() }}</p>
+      }
+      <div class="actions">
+        <button type="button" class="btn primary" [disabled]="csvBusy()" (click)="onImportCsv()">
+          {{ csvBusy() ? 'Importing…' : 'Choose CSV and import…' }}
+        </button>
+      </div>
+    </section>
   }
 </div>

@@ -36,7 +36,8 @@ export type TauriCommand =
   | 'update_settings'
   | 'copy_to_clipboard'
   | 'export_vault'
-  | 'import_vault';
+  | 'import_vault'
+  | 'import_csv';
 
 export async function call<T>(
   command: TauriCommand,

@@ -162,6 +162,42 @@ export class SettingsComponent implements OnInit {
     }
   }
 
+  protected readonly csvBusy = signal(false);
+  protected readonly csvErrorMsg = signal<string | null>(null);
+  protected readonly csvSavedMsg = signal<string | null>(null);
+
+  protected async onImportCsv(): Promise<void> {
+    if (this.csvBusy()) return;
+    this.csvBusy.set(true);
+    this.csvErrorMsg.set(null);
+    this.csvSavedMsg.set(null);
+    try {
+      const path = await open({
+        title: 'Import passwords from CSV',
+        multiple: false,
+        filters: [{ name: 'CSV', extensions: ['csv'] }],
+      });
+      if (!path) return;
+      const summary = await this.vault.importCsv(path);
+      const parts = [
+        `Imported ${summary.imported} ${summary.imported === 1 ? 'entry' : 'entries'}`,
+      ];
+      if (summary.categoriesCreated > 0) {
+        parts.push(
+          `${summary.categoriesCreated} new ${summary.categoriesCreated === 1 ? 'category' : 'categories'}`,
+        );
+      }
+      if (summary.skipped > 0) {
+        parts.push(`${summary.skipped} skipped`);
+      }
+      this.csvSavedMsg.set(`${parts.join(', ')}.`);
+    } catch (e) {
+      this.csvErrorMsg.set(formatBackendError(e));
+    } finally {
+      this.csvBusy.set(false);
+    }
+  }
+
   protected canChangePassword(): boolean {
     return (
       this.currentPw.length > 0 &&
