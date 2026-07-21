@@ -3,9 +3,11 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 
 import { Category } from '../../core/models/category.model';
+import { EntryInput } from '../../core/models/entry.model';
 import { CategoryService } from '../../core/services/category.service';
 import {
   PasswordEntryService,
+  totpActionFrom,
   validateEntryInput,
 } from '../../core/services/password-entry.service';
 import { formatBackendError } from '../../core/services/tauri-invoke';
@@ -36,6 +38,9 @@ export class EntryFormComponent implements OnInit {
   protected password = '';
   protected notes = '';
   protected categoryId: number | null = null;
+  protected totpSecret = '';
+  protected removeTotp = false;
+  protected hasExistingTotp = false;
 
   protected readonly busy = signal(false);
   protected readonly loading = signal(true);
@@ -68,6 +73,7 @@ export class EntryFormComponent implements OnInit {
         this.password = full.password;
         this.notes = full.notes ?? '';
         this.categoryId = full.categoryId;
+        this.hasExistingTotp = full.hasTotp;
       }
     } catch (e) {
       this.errorMsg.set(formatBackendError(e));
@@ -98,13 +104,14 @@ export class EntryFormComponent implements OnInit {
     this.busy.set(true);
     this.errorMsg.set(null);
     try {
-      const input = {
+      const input: EntryInput = {
         categoryId: this.categoryId,
         title: this.title.trim(),
         username: this.username,
         urlOrAppName: this.urlOrAppName,
         password: this.password,
         notes: this.notes === '' ? null : this.notes,
+        totp: totpActionFrom(this.totpSecret, this.removeTotp),
       };
       const id = this.editingId();
       if (id !== null) {

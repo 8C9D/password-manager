@@ -25,6 +25,7 @@ export type TauriCommand =
   | 'get_entry'
   | 'update_entry'
   | 'delete_entry'
+  | 'generate_totp'
   | 'list_categories'
   | 'create_category'
   | 'update_category'

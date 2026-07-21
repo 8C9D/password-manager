@@ -8,6 +8,7 @@ import { CategoryService } from '../../core/services/category.service';
 import { ClipboardService } from '../../core/services/clipboard.service';
 import { ConfirmService } from '../../core/services/confirm.service';
 import {
+  formatTotpCode,
   parseHttpUrl,
   PasswordEntryService,
 } from '../../core/services/password-entry.service';
@@ -35,7 +36,13 @@ export class EntryDetailComponent implements OnDestroy {
   protected readonly error = signal<string | null>(null);
   protected readonly showPassword = signal(false);
 
+  protected readonly totpCode = signal<string | null>(null);
+  protected readonly totpRemaining = signal(0);
+  protected readonly totpPeriod = signal(30);
+
   private hideTimer: ReturnType<typeof setTimeout> | null = null;
+  private totpTimer: ReturnType<typeof setInterval> | null = null;
+  private totpEntryId: number | null = null;
 
   constructor() {
     this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((params) => {
@@ -59,6 +66,7 @@ export class EntryDetailComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     this.cancelAutoHide();
+    this.stopTotp();
   }
 
   private cancelAutoHide(): void {
@@ -74,14 +82,63 @@ export class EntryDetailComponent implements OnDestroy {
     this.entry.set(null);
     this.showPassword.set(false);
     this.cancelAutoHide();
+    this.stopTotp();
+    this.totpCode.set(null);
     try {
       const e = await this.entries.get(id);
       this.entry.set(e);
+      if (e.hasTotp) {
+        void this.startTotp(e.id);
+      }
     } catch (err) {
       this.error.set(formatBackendError(err));
     } finally {
       this.loading.set(false);
     }
+  }
+
+  protected formatTotp(code: string): string {
+    return formatTotpCode(code);
+  }
+
+  private async startTotp(id: number): Promise<void> {
+    this.totpEntryId = id;
+    await this.refreshTotp();
+    // Only start ticking if the first fetch succeeded.
+    if (this.totpCode() !== null && this.totpTimer === null) {
+      this.totpTimer = setInterval(() => this.tickTotp(), 1000);
+    }
+  }
+
+  private async refreshTotp(): Promise<void> {
+    if (this.totpEntryId === null) return;
+    try {
+      const t = await this.entries.generateTotp(this.totpEntryId);
+      this.totpCode.set(t.code);
+      this.totpRemaining.set(t.secondsRemaining);
+      this.totpPeriod.set(t.period);
+    } catch {
+      // Leave the rest of the entry usable; just drop the code display.
+      this.stopTotp();
+      this.totpCode.set(null);
+    }
+  }
+
+  private tickTotp(): void {
+    const remaining = this.totpRemaining() - 1;
+    if (remaining <= 0) {
+      void this.refreshTotp();
+    } else {
+      this.totpRemaining.set(remaining);
+    }
+  }
+
+  private stopTotp(): void {
+    if (this.totpTimer !== null) {
+      clearInterval(this.totpTimer);
+      this.totpTimer = null;
+    }
+    this.totpEntryId = null;
   }
 
   protected toggleShow(): void {

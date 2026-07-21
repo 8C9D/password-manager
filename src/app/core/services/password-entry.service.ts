@@ -1,6 +1,12 @@
 import { Injectable, signal } from '@angular/core';
 
-import { EntryFull, EntryInput, EntrySummary } from '../models/entry.model';
+import {
+  EntryFull,
+  EntryInput,
+  EntrySummary,
+  GeneratedTotp,
+  TotpUpdate,
+} from '../models/entry.model';
 import { call } from './tauri-invoke';
 
 @Injectable({ providedIn: 'root' })
@@ -32,6 +38,10 @@ export class PasswordEntryService {
   async remove(id: number): Promise<void> {
     await call<void>('delete_entry', { id });
     await this.list();
+  }
+
+  async generateTotp(id: number): Promise<GeneratedTotp> {
+    return call<GeneratedTotp>('generate_totp', { id });
   }
 
   clear(): void {
@@ -101,6 +111,31 @@ export function parseHttpUrl(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Group a numeric TOTP code into two halves for readability, e.g.
+ * "287082" -> "287 082" and "12345678" -> "1234 5678".
+ */
+export function formatTotpCode(code: string): string {
+  if (code.length < 2) return code;
+  const mid = Math.ceil(code.length / 2);
+  return `${code.slice(0, mid)} ${code.slice(mid)}`;
+}
+
+/**
+ * Resolve the entry-form's TOTP inputs into the write action to send. A pending
+ * removal wins; otherwise a non-blank secret sets/replaces; otherwise the field
+ * is left untouched (undefined, which the backend treats as "keep").
+ */
+export function totpActionFrom(
+  secret: string,
+  removeExisting: boolean,
+): TotpUpdate | undefined {
+  if (removeExisting) return { action: 'clear' };
+  const trimmed = secret.trim();
+  if (trimmed !== '') return { action: 'set', value: trimmed };
+  return undefined;
 }
 
 export interface EntryValidationResult {

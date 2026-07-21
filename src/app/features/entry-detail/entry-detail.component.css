@@ -71,3 +71,23 @@ dd {
   font-family: inherit;
   white-space: pre-wrap;
 }
+.totp-code {
+  flex: 0 0 auto;
+  font-size: 1.25rem;
+  letter-spacing: 0.12em;
+}
+.totp-count {
+  flex: 0 0 auto;
+  min-width: 2.6rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  color: var(--muted);
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.totp-low {
+  color: var(--danger);
+  border-color: var(--danger);
+}

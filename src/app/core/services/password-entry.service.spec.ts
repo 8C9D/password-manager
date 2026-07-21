@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { EntrySummary } from '../models/entry.model';
 import {
   filterEntries,
+  formatTotpCode,
   parseHttpUrl,
   sortEntries,
+  totpActionFrom,
   validateEntryInput,
 } from './password-entry.service';
 
@@ -182,5 +184,39 @@ describe('parseHttpUrl', () => {
     expect(parseHttpUrl('file:///etc/passwd')).toBeNull();
     expect(parseHttpUrl('javascript:alert(1)')).toBeNull();
     expect(parseHttpUrl('ftp://example.com')).toBeNull();
+  });
+});
+
+describe('formatTotpCode', () => {
+  it('splits a 6-digit code into two groups of three', () => {
+    expect(formatTotpCode('287082')).toBe('287 082');
+  });
+
+  it('splits an 8-digit code into two groups of four', () => {
+    expect(formatTotpCode('12345678')).toBe('1234 5678');
+  });
+
+  it('leaves a very short code unchanged', () => {
+    expect(formatTotpCode('7')).toBe('7');
+    expect(formatTotpCode('')).toBe('');
+  });
+});
+
+describe('totpActionFrom', () => {
+  it('returns a clear action when removal is requested (winning over a secret)', () => {
+    expect(totpActionFrom('', true)).toEqual({ action: 'clear' });
+    expect(totpActionFrom('JBSWY3DPEHPK3PXP', true)).toEqual({ action: 'clear' });
+  });
+
+  it('returns a trimmed set action for a non-blank secret', () => {
+    expect(totpActionFrom('  JBSWY3DPEHPK3PXP  ', false)).toEqual({
+      action: 'set',
+      value: 'JBSWY3DPEHPK3PXP',
+    });
+  });
+
+  it('returns undefined (keep) when the secret is blank and nothing is removed', () => {
+    expect(totpActionFrom('', false)).toBeUndefined();
+    expect(totpActionFrom('   ', false)).toBeUndefined();
   });
 });

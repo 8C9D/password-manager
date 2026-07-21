@@ -52,6 +52,23 @@
         </button>
       </dd>
 
+      @if (e.hasTotp) {
+        <dt>Two-factor code</dt>
+        <dd>
+          @if (totpCode(); as code) {
+            <span class="value mono totp-code">{{ formatTotp(code) }}</span>
+            <span class="totp-count" [class.totp-low]="totpRemaining() <= 5">
+              {{ totpRemaining() }}s
+            </span>
+            <button class="btn small primary" type="button" (click)="copy(code, 'code')">
+              Copy
+            </button>
+          } @else {
+            <span class="value muted">Code unavailable</span>
+          }
+        </dd>
+      }
+
       @if (e.notes) {
         <dt>Notes</dt>
         <dd>

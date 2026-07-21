@@ -20,7 +20,14 @@ export interface EntryFull {
   createdAt: string;
   updatedAt: string;
   lastUsedAt: string | null;
+  hasTotp: boolean;
 }
+
+/** How an entry write should treat the stored TOTP secret. */
+export type TotpUpdate =
+  | { action: 'keep' }
+  | { action: 'clear' }
+  | { action: 'set'; value: string };
 
 export interface EntryInput {
   categoryId: number | null;
@@ -29,6 +36,13 @@ export interface EntryInput {
   urlOrAppName: string;
   password: string;
   notes: string | null;
+  totp?: TotpUpdate;
+}
+
+export interface GeneratedTotp {
+  code: string;
+  period: number;
+  secondsRemaining: number;
 }
 
 export interface VaultStatus {

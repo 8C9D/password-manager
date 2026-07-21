@@ -67,6 +67,31 @@
         <textarea name="notes" [(ngModel)]="notes" rows="4"></textarea>
       </label>
 
+      <label>
+        Two-factor code (TOTP)
+        <input
+          type="text"
+          name="totpSecret"
+          [(ngModel)]="totpSecret"
+          autocomplete="off"
+          [disabled]="removeTotp"
+          placeholder="Base32 secret or otpauth:// URI"
+        />
+      </label>
+      @if (hasExistingTotp) {
+        <p class="muted totp-hint">
+          A TOTP secret is configured. Enter a new secret above to replace it, or:
+        </p>
+        <label class="totp-remove">
+          <input type="checkbox" name="removeTotp" [(ngModel)]="removeTotp" />
+          Remove the existing TOTP secret
+        </label>
+      } @else {
+        <p class="muted totp-hint">
+          Optional: paste a 2FA setup key to generate rotating codes on this entry.
+        </p>
+      }
+
       @if (errorMsg()) {
         <p class="warn">{{ errorMsg() }}</p>
       }
