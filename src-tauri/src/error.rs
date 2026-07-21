@@ -15,6 +15,9 @@ pub enum AppError {
     #[error("incorrect master password")]
     WrongPassword,
 
+    #[error("too many attempts: wait {0} seconds before trying again")]
+    TooManyUnlockAttempts(u64),
+
     #[error("entry not found")]
     EntryNotFound,
 
@@ -52,6 +55,7 @@ impl Serialize for AppError {
             AppError::VaultAlreadyExists => "vault_already_exists",
             AppError::VaultNotFound => "vault_not_found",
             AppError::WrongPassword => "wrong_password",
+            AppError::TooManyUnlockAttempts(_) => "too_many_unlock_attempts",
             AppError::EntryNotFound => "entry_not_found",
             AppError::CategoryNotFound => "category_not_found",
             AppError::Validation(_) => "validation",
@@ -112,6 +116,15 @@ mod tests {
             AppError::CategoryNotFound,
             "category_not_found",
             "category not found",
+        );
+    }
+
+    #[test]
+    fn too_many_unlock_attempts_carries_the_wait_seconds() {
+        assert_wire(
+            AppError::TooManyUnlockAttempts(3),
+            "too_many_unlock_attempts",
+            "too many attempts: wait 3 seconds before trying again",
         );
     }
 

@@ -93,6 +93,18 @@ describe('formatBackendError', () => {
     ).toBe('boom');
   });
 
+  it('passes through the unlock-backoff message with its live wait time', () => {
+    // The backend embeds the remaining seconds in the message; the fallback
+    // must surface it verbatim so the user sees the countdown, not a static
+    // string that would hide it.
+    expect(
+      formatBackendError({
+        kind: 'too_many_unlock_attempts',
+        message: 'too many attempts: wait 4 seconds before trying again',
+      }),
+    ).toBe('too many attempts: wait 4 seconds before trying again');
+  });
+
   it('applies overrides ahead of the default mapping', () => {
     expect(
       formatBackendError(

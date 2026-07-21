@@ -1,4 +1,5 @@
 use std::sync::Mutex;
+use std::time::Instant;
 
 use rusqlite::Connection;
 
@@ -13,6 +14,10 @@ pub struct AppStateInner {
     pub conn: Connection,
     pub key: Option<VaultKey>,
     pub clipboard_token: Option<String>,
+    /// Consecutive failed unlock attempts, reset on a successful unlock.
+    pub failed_unlocks: u32,
+    /// When the last failed unlock happened, for computing the backoff window.
+    pub last_failed_unlock: Option<Instant>,
 }
 
 impl AppState {
@@ -22,6 +27,8 @@ impl AppState {
                 conn,
                 key: None,
                 clipboard_token: None,
+                failed_unlocks: 0,
+                last_failed_unlock: None,
             }),
         }
     }

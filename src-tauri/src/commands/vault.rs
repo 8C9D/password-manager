@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use serde::Serialize;
 use tauri::State;
 use zeroize::Zeroizing;
@@ -143,18 +145,67 @@ pub(crate) fn verify_password(
     Ok(key)
 }
 
+/// Unlock attempts allowed with no delay before backoff starts.
+pub(crate) const FREE_UNLOCK_ATTEMPTS: u32 = 5;
+/// Upper bound on the escalating unlock backoff.
+pub(crate) const MAX_UNLOCK_BACKOFF_SECS: u64 = 300;
+
+/// Required wait (seconds) before the next unlock attempt after
+/// `consecutive_failures` wrong master passwords: zero for the first
+/// `FREE_UNLOCK_ATTEMPTS`, then 1s doubling per further failure, capped at
+/// `MAX_UNLOCK_BACKOFF_SECS`.
+///
+/// This only slows *interactive* guessing through the app. It is not a defense
+/// against offline brute force of a copied vault file - the Argon2id KDF cost
+/// is what protects against that.
+pub(crate) fn unlock_backoff_secs(consecutive_failures: u32) -> u64 {
+    if consecutive_failures <= FREE_UNLOCK_ATTEMPTS {
+        return 0;
+    }
+    let over = consecutive_failures - FREE_UNLOCK_ATTEMPTS; // >= 1
+    let secs = 1u64.checked_shl(over - 1).unwrap_or(u64::MAX);
+    secs.min(MAX_UNLOCK_BACKOFF_SECS)
+}
+
+/// Remaining wait given the failure count and seconds elapsed since the last
+/// failed attempt. Zero means an attempt is allowed now.
+pub(crate) fn remaining_unlock_backoff_secs(consecutive_failures: u32, elapsed_secs: u64) -> u64 {
+    unlock_backoff_secs(consecutive_failures).saturating_sub(elapsed_secs)
+}
+
 fn unlock_vault_impl(state: &AppState, master_password: String) -> Result<(), AppError> {
     let password = Zeroizing::new(master_password);
 
-    let (salt, encrypted_test, test_nonce) =
-        with_state(state, |s| read_vault_crypto_row(&s.conn))?;
+    // Enforce interactive-guessing backoff BEFORE the expensive Argon2id
+    // derivation, so a locked-out attempt costs no CPU.
+    let (salt, encrypted_test, test_nonce) = with_state(state, |s| {
+        let elapsed = s
+            .last_failed_unlock
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(u64::MAX);
+        let wait = remaining_unlock_backoff_secs(s.failed_unlocks, elapsed);
+        if wait > 0 {
+            return Err(AppError::TooManyUnlockAttempts(wait));
+        }
+        read_vault_crypto_row(&s.conn)
+    })?;
 
-    let key = verify_password(&salt, &encrypted_test, &test_nonce, &password)?;
-
-    with_state(state, |s| {
-        s.key = Some(key);
-        Ok(())
-    })
+    match verify_password(&salt, &encrypted_test, &test_nonce, &password) {
+        Ok(key) => with_state(state, |s| {
+            s.key = Some(key);
+            s.failed_unlocks = 0;
+            s.last_failed_unlock = None;
+            Ok(())
+        }),
+        Err(e) => {
+            with_state(state, |s| {
+                s.failed_unlocks = s.failed_unlocks.saturating_add(1);
+                s.last_failed_unlock = Some(Instant::now());
+                Ok(())
+            })?;
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -440,6 +491,65 @@ mod tests {
             unlock_vault_impl(&state, "wrong-password".into()),
             Err(AppError::WrongPassword)
         ));
+    }
+
+    #[test]
+    fn backoff_is_zero_until_free_attempts_are_used() {
+        for f in 0..=FREE_UNLOCK_ATTEMPTS {
+            assert_eq!(unlock_backoff_secs(f), 0, "no backoff for {f} failures");
+        }
+        // Then 1s doubling per further failure.
+        assert_eq!(unlock_backoff_secs(FREE_UNLOCK_ATTEMPTS + 1), 1);
+        assert_eq!(unlock_backoff_secs(FREE_UNLOCK_ATTEMPTS + 2), 2);
+        assert_eq!(unlock_backoff_secs(FREE_UNLOCK_ATTEMPTS + 3), 4);
+        assert_eq!(unlock_backoff_secs(FREE_UNLOCK_ATTEMPTS + 4), 8);
+        // Escalation is capped and never overflows.
+        assert_eq!(unlock_backoff_secs(1000), MAX_UNLOCK_BACKOFF_SECS);
+        assert_eq!(unlock_backoff_secs(u32::MAX), MAX_UNLOCK_BACKOFF_SECS);
+    }
+
+    #[test]
+    fn remaining_backoff_counts_down_with_elapsed_time() {
+        let failures = FREE_UNLOCK_ATTEMPTS + 3; // 4s backoff
+        assert_eq!(remaining_unlock_backoff_secs(failures, 0), 4);
+        assert_eq!(remaining_unlock_backoff_secs(failures, 3), 1);
+        assert_eq!(remaining_unlock_backoff_secs(failures, 4), 0);
+        assert_eq!(remaining_unlock_backoff_secs(failures, 99), 0);
+        // Inside the free window there is never a wait.
+        assert_eq!(remaining_unlock_backoff_secs(1, 0), 0);
+    }
+
+    #[test]
+    fn repeated_wrong_passwords_lock_out_even_the_correct_one() {
+        let state = state_with_vault();
+        lock_vault_impl(&state).unwrap();
+        // Use up the free attempts plus one more to arm the backoff.
+        for _ in 0..=FREE_UNLOCK_ATTEMPTS {
+            assert!(matches!(
+                unlock_vault_impl(&state, "wrong".into()),
+                Err(AppError::WrongPassword)
+            ));
+        }
+        // The next attempt is refused by backoff before any password check -
+        // so even the correct password is rejected until the wait elapses.
+        assert!(matches!(
+            unlock_vault_impl(&state, PW_OLD.into()),
+            Err(AppError::TooManyUnlockAttempts(_))
+        ));
+    }
+
+    #[test]
+    fn successful_unlock_resets_the_failure_counter() {
+        let state = state_with_vault();
+        lock_vault_impl(&state).unwrap();
+        // A few failures, staying within the free window.
+        for _ in 0..3 {
+            let _ = unlock_vault_impl(&state, "wrong".into());
+        }
+        unlock_vault_impl(&state, PW_OLD.into()).unwrap();
+        let guard = state.inner.lock().unwrap();
+        assert_eq!(guard.failed_unlocks, 0);
+        assert!(guard.last_failed_unlock.is_none());
     }
 
     #[test]
