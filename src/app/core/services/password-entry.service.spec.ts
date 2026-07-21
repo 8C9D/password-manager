@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { EntrySummary } from '../models/entry.model';
 import {
+  describeIssue,
   filterEntries,
   formatTotpCode,
   parseHttpUrl,
@@ -218,5 +219,24 @@ describe('totpActionFrom', () => {
   it('returns undefined (keep) when the secret is blank and nothing is removed', () => {
     expect(totpActionFrom('', false)).toBeUndefined();
     expect(totpActionFrom('   ', false)).toBeUndefined();
+  });
+});
+
+describe('describeIssue', () => {
+  const base = { id: 1, title: 'X', weak: false, reused: false, stale: false };
+
+  it('lists only the flagged problems, in a stable order', () => {
+    expect(describeIssue({ ...base, weak: true, reused: true })).toEqual([
+      'Weak',
+      'Reused',
+    ]);
+    expect(describeIssue({ ...base, stale: true })).toEqual(['Old']);
+    expect(
+      describeIssue({ ...base, weak: true, reused: true, stale: true }),
+    ).toEqual(['Weak', 'Reused', 'Old']);
+  });
+
+  it('returns an empty list when nothing is wrong', () => {
+    expect(describeIssue(base)).toEqual([]);
   });
 });

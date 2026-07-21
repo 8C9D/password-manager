@@ -6,6 +6,7 @@ import { EntryDetailComponent } from './features/entry-detail/entry-detail.compo
 import { EntryEmptyComponent } from './features/entry-detail/entry-empty.component';
 import { EntryFormComponent } from './features/entry-form/entry-form.component';
 import { SettingsComponent } from './features/settings/settings.component';
+import { VaultHealthComponent } from './features/vault-health/vault-health.component';
 import { VaultLayoutComponent } from './features/vault-layout/vault-layout.component';
 import { VaultUnlockComponent } from './features/vault-unlock/vault-unlock.component';
 
@@ -20,6 +21,7 @@ export const routes: Routes = [
       { path: '', component: EntryEmptyComponent },
       { path: 'new', component: EntryFormComponent },
       { path: 'categories', component: CategoryManageComponent },
+      { path: 'health', component: VaultHealthComponent },
       { path: 'settings', component: SettingsComponent },
       { path: ':id', component: EntryDetailComponent },
       { path: ':id/edit', component: EntryFormComponent },

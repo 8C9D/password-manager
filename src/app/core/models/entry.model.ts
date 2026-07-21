@@ -45,6 +45,22 @@ export interface GeneratedTotp {
   secondsRemaining: number;
 }
 
+export interface EntryIssue {
+  id: number;
+  title: string;
+  weak: boolean;
+  reused: boolean;
+  stale: boolean;
+}
+
+export interface VaultHealth {
+  total: number;
+  weakCount: number;
+  reusedCount: number;
+  staleCount: number;
+  issues: EntryIssue[];
+}
+
 export interface VaultStatus {
   exists: boolean;
   unlocked: boolean;

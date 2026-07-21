@@ -26,6 +26,7 @@ export type TauriCommand =
   | 'update_entry'
   | 'delete_entry'
   | 'generate_totp'
+  | 'audit_vault'
   | 'list_categories'
   | 'create_category'
   | 'update_category'

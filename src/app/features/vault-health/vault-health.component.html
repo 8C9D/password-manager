@@ -1,0 +1,53 @@
+<div class="health">
+  <header class="head">
+    <h2>Vault health</h2>
+    <button type="button" class="btn small" (click)="run()" [disabled]="loading()">
+      {{ loading() ? 'Scanning…' : 'Rescan' }}
+    </button>
+  </header>
+
+  @if (loading()) {
+    <p class="muted">Scanning your vault…</p>
+  } @else if (error()) {
+    <p class="warn">{{ error() }}</p>
+  } @else if (health(); as h) {
+    <div class="tiles">
+      <div class="tile">
+        <span class="num">{{ h.total }}</span>
+        <span class="cap">entries</span>
+      </div>
+      <div class="tile" [class.bad]="h.weakCount > 0">
+        <span class="num">{{ h.weakCount }}</span>
+        <span class="cap">weak</span>
+      </div>
+      <div class="tile" [class.bad]="h.reusedCount > 0">
+        <span class="num">{{ h.reusedCount }}</span>
+        <span class="cap">reused</span>
+      </div>
+      <div class="tile" [class.bad]="h.staleCount > 0">
+        <span class="num">{{ h.staleCount }}</span>
+        <span class="cap">old</span>
+      </div>
+    </div>
+
+    @if (h.issues.length === 0) {
+      <p class="ok">No issues found. Every password is unique, long enough, and recent.</p>
+    } @else {
+      <p class="muted">
+        Weak = short or low variety · Reused = shared with another entry · Old = unchanged for over a year.
+      </p>
+      <ul class="issues">
+        @for (issue of h.issues; track issue.id) {
+          <li>
+            <a [routerLink]="['/vault', issue.id]" class="issue-title">{{ issue.title }}</a>
+            <span class="badges">
+              @for (label of labels(issue); track label) {
+                <span class="badge">{{ label }}</span>
+              }
+            </span>
+          </li>
+        }
+      </ul>
+    }
+  }
+</div>

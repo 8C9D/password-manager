@@ -3,9 +3,11 @@ import { Injectable, signal } from '@angular/core';
 import {
   EntryFull,
   EntryInput,
+  EntryIssue,
   EntrySummary,
   GeneratedTotp,
   TotpUpdate,
+  VaultHealth,
 } from '../models/entry.model';
 import { call } from './tauri-invoke';
 
@@ -42,6 +44,10 @@ export class PasswordEntryService {
 
   async generateTotp(id: number): Promise<GeneratedTotp> {
     return call<GeneratedTotp>('generate_totp', { id });
+  }
+
+  async auditVault(): Promise<VaultHealth> {
+    return call<VaultHealth>('audit_vault');
   }
 
   clear(): void {
@@ -136,6 +142,15 @@ export function totpActionFrom(
   const trimmed = secret.trim();
   if (trimmed !== '') return { action: 'set', value: trimmed };
   return undefined;
+}
+
+/** Human-readable badge labels for the problems flagged on an audited entry. */
+export function describeIssue(issue: EntryIssue): string[] {
+  const labels: string[] = [];
+  if (issue.weak) labels.push('Weak');
+  if (issue.reused) labels.push('Reused');
+  if (issue.stale) labels.push('Old');
+  return labels;
 }
 
 export interface EntryValidationResult {
