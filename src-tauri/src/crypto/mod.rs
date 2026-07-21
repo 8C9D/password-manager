@@ -1,5 +1,6 @@
 pub mod aead;
 pub mod kdf;
+pub mod totp;
 
 pub use aead::{decrypt, encrypt};
 pub use kdf::{derive_key, generate_salt, VaultKey};
