@@ -183,7 +183,7 @@ pub fn lock_vault(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(
     // wipe the clipboard if it still holds the value we put there.
     if let Some(token) = token {
         let current = app.clipboard().read_text().ok();
-        if current.as_deref() == Some(token.as_str()) {
+        if crate::commands::clipboard::is_our_clipboard_value(current.as_deref(), &token) {
             if let Err(e) = app.clipboard().clear() {
                 log::warn!("failed to clear clipboard on lock: {e}");
             }

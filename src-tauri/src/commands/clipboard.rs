@@ -10,6 +10,20 @@ use super::settings::{
     clipboard_clear_secs, MAX_CLIPBOARD_CLEAR_SECS, MIN_CLIPBOARD_CLEAR_SECS,
 };
 
+/// Clamp a caller-requested auto-clear delay into the supported range. The
+/// persisted-setting path is already clamped on read (`clipboard_clear_secs`).
+pub(crate) fn clamp_clear_secs(secs: u64) -> u64 {
+    secs.clamp(MIN_CLIPBOARD_CLEAR_SECS, MAX_CLIPBOARD_CLEAR_SECS)
+}
+
+/// Whether a clipboard value still equals the one we wrote. This guards every
+/// clear: we only ever wipe the OS clipboard (or drop our stored token) while
+/// it still holds the exact secret we put there, never a value the user copied
+/// from somewhere else afterwards.
+pub(crate) fn is_our_clipboard_value(current: Option<&str>, ours: &str) -> bool {
+    current == Some(ours)
+}
+
 #[tauri::command]
 pub fn copy_to_clipboard(
     app: AppHandle,
@@ -19,7 +33,7 @@ pub fn copy_to_clipboard(
 ) -> Result<u64, AppError> {
     // An explicit argument wins; otherwise use the persisted setting.
     let secs = match clear_after_secs {
-        Some(v) => v.clamp(MIN_CLIPBOARD_CLEAR_SECS, MAX_CLIPBOARD_CLEAR_SECS),
+        Some(v) => clamp_clear_secs(v),
         None => with_state(&state, |s| Ok(clipboard_clear_secs(&s.conn)))?,
     };
 
@@ -42,11 +56,7 @@ pub fn copy_to_clipboard(
                     Ok(g) => g,
                     Err(_) => return,
                 };
-                let matches = guard
-                    .clipboard_token
-                    .as_deref()
-                    .map(|t| t == token.as_str())
-                    .unwrap_or(false);
+                let matches = is_our_clipboard_value(guard.clipboard_token.as_deref(), &token);
                 if matches {
                     guard.clipboard_token = None;
                 }
@@ -58,10 +68,38 @@ pub fn copy_to_clipboard(
             return;
         }
         let current = app_for_task.clipboard().read_text().ok();
-        if current.as_deref() == Some(token.as_str()) {
+        if is_our_clipboard_value(current.as_deref(), &token) {
             let _ = app_for_task.clipboard().clear();
         }
     });
 
     Ok(secs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_forces_requested_delay_into_supported_range() {
+        assert_eq!(clamp_clear_secs(0), MIN_CLIPBOARD_CLEAR_SECS);
+        assert_eq!(clamp_clear_secs(MIN_CLIPBOARD_CLEAR_SECS), MIN_CLIPBOARD_CLEAR_SECS);
+        assert_eq!(clamp_clear_secs(60), 60);
+        assert_eq!(clamp_clear_secs(MAX_CLIPBOARD_CLEAR_SECS), MAX_CLIPBOARD_CLEAR_SECS);
+        assert_eq!(clamp_clear_secs(MAX_CLIPBOARD_CLEAR_SECS + 1), MAX_CLIPBOARD_CLEAR_SECS);
+        assert_eq!(clamp_clear_secs(u64::MAX), MAX_CLIPBOARD_CLEAR_SECS);
+    }
+
+    #[test]
+    fn is_our_value_matches_only_the_exact_secret_we_wrote() {
+        assert!(is_our_clipboard_value(Some("s3cret"), "s3cret"));
+        // A value the user copied afterwards must not be treated as ours.
+        assert!(!is_our_clipboard_value(Some("something-else"), "s3cret"));
+        // Trailing whitespace differs; must not match.
+        assert!(!is_our_clipboard_value(Some("s3cret "), "s3cret"));
+        // An empty/cleared clipboard is not ours.
+        assert!(!is_our_clipboard_value(None, "s3cret"));
+        // Degenerate empty-secret case still compares by exact equality.
+        assert!(is_our_clipboard_value(Some(""), ""));
+    }
 }
