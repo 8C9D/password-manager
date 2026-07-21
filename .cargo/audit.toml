@@ -1,0 +1,17 @@
+# cargo-audit configuration. See https://github.com/rustsec/rustsec/tree/main/cargo-audit
+#
+# Unmaintained/unsound advisories are reported as warnings (non-failing) and are
+# left visible on purpose. Only genuinely unactionable *vulnerabilities* are
+# ignored below, each with a rationale and a link to what would let us drop it.
+
+[advisories]
+ignore = [
+    # quick-xml 0.39.x DoS advisories, both reachable ONLY through
+    # tauri -> plist (Apple .plist / bundle-metadata parsing). This app never
+    # feeds attacker-controlled XML to quick-xml, so the memory-exhaustion /
+    # quadratic-parse DoS is not reachable here. The fix is quick-xml >= 0.41,
+    # but plist 1.9.0 pins quick-xml "^0.39.2", so it cannot be bumped without
+    # an upstream plist/tauri release. Re-evaluate when tauri updates plist.
+    "RUSTSEC-2026-0194", # quick-xml: quadratic run time checking duplicate attribute names
+    "RUSTSEC-2026-0195", # quick-xml: unbounded namespace-declaration allocation
+]
