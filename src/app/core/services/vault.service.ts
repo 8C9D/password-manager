@@ -1,10 +1,15 @@
-import { computed, Injectable, signal } from '@angular/core';
+import { computed, inject, Injectable, signal } from '@angular/core';
 
 import { VaultStatus } from '../models/entry.model';
+import { CategoryService } from './category.service';
+import { PasswordEntryService } from './password-entry.service';
 import { call } from './tauri-invoke';
 
 @Injectable({ providedIn: 'root' })
 export class VaultService {
+  private readonly entries = inject(PasswordEntryService);
+  private readonly categories = inject(CategoryService);
+
   readonly status = signal<VaultStatus | null>(null);
   readonly isUnlocked = computed(() => this.status()?.unlocked ?? false);
 
@@ -36,6 +41,10 @@ export class VaultService {
 
   async lock(): Promise<void> {
     await call<void>('lock_vault');
+    // Purge cached vault state so entry/category metadata doesn't linger in
+    // memory (or flash on screen) after the vault is locked.
+    this.entries.clear();
+    this.categories.clear();
     await this.refreshStatus();
   }
 
