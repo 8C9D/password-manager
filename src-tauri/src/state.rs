@@ -2,6 +2,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use rusqlite::Connection;
+use zeroize::Zeroizing;
 
 use crate::crypto::VaultKey;
 use crate::error::AppError;
@@ -42,8 +43,11 @@ pub fn with_unlocked<R>(
         .inner
         .lock()
         .map_err(|_| AppError::Internal("state lock poisoned".into()))?;
-    let key_bytes: [u8; 32] = match guard.key.as_ref() {
-        Some(k) => **k,
+    // Copy the key into a Zeroizing wrapper so this stack copy is wiped on
+    // drop; a bare `[u8; 32]` has no Drop and would leave the master key in
+    // stack memory after every unlocked command, defeating zeroize-on-lock.
+    let key_bytes = match guard.key.as_ref() {
+        Some(k) => Zeroizing::new(**k),
         None => return Err(AppError::Locked),
     };
     f(&mut guard, &key_bytes)
