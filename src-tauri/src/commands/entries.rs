@@ -313,7 +313,12 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
         let (notes_bytes, notes_nonce) = encrypt_optional(key, input.notes.as_deref())?;
         let tags = tags_to_json(&normalize_tags(&input.tags));
         let now = now_iso8601();
-        let n = s.conn.execute(
+
+        // The field write and the TOTP write share one transaction so a failure
+        // in either (e.g. an unparseable TOTP secret) rolls back the whole edit
+        // instead of leaving the entry half-updated.
+        let tx = s.conn.transaction()?;
+        let n = tx.execute(
             "UPDATE password_entries SET
                 category_id = ?1,
                 title = ?2,
@@ -348,21 +353,22 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
         match &input.totp {
             TotpUpdate::Keep => {}
             TotpUpdate::Clear => {
-                s.conn.execute(
+                tx.execute(
                     "UPDATE password_entries SET encrypted_totp = NULL, totp_nonce = NULL
                      WHERE id = ?1",
                     rusqlite::params![id],
                 )?;
             }
             TotpUpdate::Set { value } => {
-                let (b, n) = encrypt_totp(key, value)?;
-                s.conn.execute(
+                let (totp_bytes, totp_nonce) = encrypt_totp(key, value)?;
+                tx.execute(
                     "UPDATE password_entries SET encrypted_totp = ?1, totp_nonce = ?2
                      WHERE id = ?3",
-                    rusqlite::params![b, n, id],
+                    rusqlite::params![totp_bytes, totp_nonce, id],
                 )?;
             }
         }
+        tx.commit()?;
         Ok(())
     })
 }
@@ -756,6 +762,43 @@ mod tests {
         assert_eq!(code.period, 30);
         // And a different time step yields the next RFC vector.
         assert_eq!(generate_totp_at(&state, id, 1111111109).unwrap().code, "081804");
+    }
+
+    #[test]
+    fn update_with_unparseable_totp_rolls_back_the_whole_edit() {
+        let state = unlocked_state();
+        let id = create_entry_impl(
+            &state,
+            EntryInput {
+                totp: TotpUpdate::Set {
+                    value: RFC_SECRET.into(),
+                },
+                ..sample_input()
+            },
+        )
+        .unwrap();
+
+        // One edit that both rotates the password and sets a malformed TOTP
+        // secret. The bad secret must abort the whole update, not leave the new
+        // password committed while the TOTP write fails.
+        let result = update_entry_impl(
+            &state,
+            id,
+            EntryInput {
+                password: "rotated-password".into(),
+                totp: TotpUpdate::Set {
+                    value: "!!! not base32 !!!".into(),
+                },
+                ..sample_input()
+            },
+        );
+        assert!(matches!(result, Err(AppError::Validation(_))));
+
+        // The entry is unchanged: original password and original working TOTP.
+        let full = get_entry_impl(&state, id).unwrap();
+        assert_eq!(full.password, "hunter2");
+        assert!(full.has_totp);
+        assert_eq!(generate_totp_at(&state, id, 59).unwrap().code, "287082");
     }
 
     #[test]
