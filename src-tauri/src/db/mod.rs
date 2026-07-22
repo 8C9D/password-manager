@@ -77,13 +77,23 @@ fn migrate(conn: &mut Connection, migrations: &[Migration]) -> Result<(), AppErr
 
 pub fn open_and_migrate(path: &Path) -> Result<Connection, AppError> {
     let mut conn = Connection::open(path)?;
+    enable_foreign_keys(&conn)?;
     migrate(&mut conn, MIGRATIONS)?;
     Ok(conn)
+}
+
+/// `foreign_keys` is a per-connection pragma that SQLite defaults to OFF, so it
+/// must be set on every open - not just at schema creation - for the
+/// `ON DELETE SET NULL` on `password_entries.category_id` to actually fire.
+fn enable_foreign_keys(conn: &Connection) -> Result<(), AppError> {
+    conn.pragma_update(None, "foreign_keys", true)?;
+    Ok(())
 }
 
 #[cfg(test)]
 pub fn open_in_memory() -> Result<Connection, AppError> {
     let mut conn = Connection::open_in_memory()?;
+    enable_foreign_keys(&conn)?;
     migrate(&mut conn, MIGRATIONS)?;
     Ok(conn)
 }
@@ -124,6 +134,36 @@ mod tests {
         for t in ["vault_metadata", "categories", "password_entries", "settings"] {
             assert!(tables.iter().any(|n| n == t), "missing table {t}");
         }
+    }
+
+    #[test]
+    fn deleting_a_category_nulls_entry_refs_when_foreign_keys_are_enforced() {
+        // open_in_memory enables foreign_keys, so ON DELETE SET NULL must fire.
+        let conn = open_in_memory().unwrap();
+        conn.execute(
+            "INSERT INTO categories (id, name, created_at, updated_at)
+             VALUES (1, 'Work', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO password_entries
+                (id, category_id, title, username, url_or_app_name,
+                 encrypted_password, password_nonce, created_at, updated_at)
+             VALUES (1, 1, 'E', 'u', 'x', X'00', X'00',
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM categories WHERE id = 1", []).unwrap();
+        let category_id: Option<i64> = conn
+            .query_row(
+                "SELECT category_id FROM password_entries WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(category_id, None);
     }
 
     #[test]
