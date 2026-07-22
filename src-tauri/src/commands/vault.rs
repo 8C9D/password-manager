@@ -243,6 +243,28 @@ pub fn lock_vault(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(
     Ok(())
 }
 
+/// An optional encrypted field re-encoded under a new key, as `(ciphertext, nonce)`.
+type ReencryptedField = (Option<Vec<u8>>, Option<Vec<u8>>);
+
+/// Re-encrypt an optional encrypted column from `old_key` to `new_key`,
+/// preserving `NULL` when the field is absent. Used by the master-password
+/// change to rotate every encrypted column (notes and the TOTP secret alike).
+fn reencrypt_optional(
+    old_key: &[u8; 32],
+    new_key: &[u8; 32],
+    ciphertext: Option<Vec<u8>>,
+    nonce: Option<Vec<u8>>,
+) -> Result<ReencryptedField, AppError> {
+    match (ciphertext, nonce) {
+        (Some(c), Some(n)) => {
+            let plain = Zeroizing::new(crypto::decrypt(old_key, &c, &n)?);
+            let ct = crypto::encrypt(new_key, &plain)?;
+            Ok((Some(ct.bytes), Some(ct.nonce.to_vec())))
+        }
+        _ => Ok((None, None)),
+    }
+}
+
 fn change_master_password_impl(
     state: &AppState,
     current_password: String,
@@ -301,44 +323,61 @@ fn change_master_password_impl(
             ],
         )?;
 
-        type EntryCryptoRow = (i64, Vec<u8>, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>);
+        type EntryCryptoRow = (
+            i64,
+            Vec<u8>,
+            Vec<u8>,
+            Option<Vec<u8>>,
+            Option<Vec<u8>>,
+            Option<Vec<u8>>,
+            Option<Vec<u8>>,
+        );
         let mut stmt = tx.prepare(
             "SELECT id, encrypted_password, password_nonce,
-                    encrypted_notes, notes_nonce
+                    encrypted_notes, notes_nonce,
+                    encrypted_totp, totp_nonce
              FROM password_entries",
         )?;
         let rows: Vec<EntryCryptoRow> = stmt
             .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         drop(stmt);
 
-        for (id, enc_pw, pw_nonce, enc_notes, notes_nonce) in rows {
+        for (id, enc_pw, pw_nonce, enc_notes, notes_nonce, enc_totp, totp_nonce) in rows {
             let pw_plain = Zeroizing::new(crypto::decrypt(&old_key, &enc_pw, &pw_nonce)?);
             let pw_ct = crypto::encrypt(&new_key, &pw_plain)?;
 
-            let (notes_bytes, notes_nonce_new) = match (enc_notes, notes_nonce) {
-                (Some(c), Some(n)) => {
-                    let notes_plain = Zeroizing::new(crypto::decrypt(&old_key, &c, &n)?);
-                    let ct = crypto::encrypt(&new_key, &notes_plain)?;
-                    (Some(ct.bytes), Some(ct.nonce.to_vec()))
-                }
-                _ => (None, None),
-            };
+            let (notes_bytes, notes_nonce_new) =
+                reencrypt_optional(&old_key, &new_key, enc_notes, notes_nonce)?;
+            let (totp_bytes, totp_nonce_new) =
+                reencrypt_optional(&old_key, &new_key, enc_totp, totp_nonce)?;
 
             tx.execute(
                 "UPDATE password_entries SET
                     encrypted_password = ?1,
                     password_nonce = ?2,
                     encrypted_notes = ?3,
-                    notes_nonce = ?4
-                 WHERE id = ?5",
+                    notes_nonce = ?4,
+                    encrypted_totp = ?5,
+                    totp_nonce = ?6
+                 WHERE id = ?7",
                 rusqlite::params![
                     pw_ct.bytes,
                     pw_ct.nonce.as_slice(),
                     notes_bytes,
                     notes_nonce_new,
+                    totp_bytes,
+                    totp_nonce_new,
                     id,
                 ],
             )?;
@@ -692,6 +731,62 @@ mod tests {
             decrypt_entry(&state, id1),
             ("hunter2".to_string(), Some("note one".to_string()))
         );
+    }
+
+    #[test]
+    fn change_reencrypts_totp_secret_so_it_survives_a_rekey() {
+        use crate::commands::entries::encrypt_totp;
+        use crate::crypto::totp::TotpConfig;
+
+        // RFC 6238 SHA1 seed, base32-encoded.
+        const RFC_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+        let state = state_with_vault();
+        let id = insert_entry(&state, "GitHub", "hunter2", None);
+
+        // Attach a TOTP secret encrypted under the current (old) vault key.
+        let old_key = current_key(&state);
+        let (totp_bytes, totp_nonce) = encrypt_totp(&old_key, RFC_SECRET).unwrap();
+        {
+            let guard = state.inner.lock().unwrap();
+            guard
+                .conn
+                .execute(
+                    "UPDATE password_entries SET encrypted_totp = ?1, totp_nonce = ?2
+                     WHERE id = ?3",
+                    rusqlite::params![totp_bytes, totp_nonce, id],
+                )
+                .unwrap();
+        }
+
+        change_master_password_impl(&state, PW_OLD.into(), PW_NEW.into()).unwrap();
+
+        // After the rekey the TOTP blob must decrypt under the NEW key and still
+        // hold the original secret. Before the fix it was left encrypted under
+        // the old key, whose salt is gone, making it permanently unrecoverable.
+        let new_key = current_key(&state);
+        let (enc, nonce): (Vec<u8>, Vec<u8>) = {
+            let guard = state.inner.lock().unwrap();
+            guard
+                .conn
+                .query_row(
+                    "SELECT encrypted_totp, totp_nonce FROM password_entries WHERE id = ?1",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap()
+        };
+        let json = crypto::decrypt(&new_key, &enc, &nonce).unwrap();
+        let config: TotpConfig = serde_json::from_slice(&json).unwrap();
+        assert_eq!(config.secret_base32, RFC_SECRET);
+
+        // And it still decrypts after a fresh lock/unlock with the new password.
+        lock_vault_impl(&state).unwrap();
+        unlock_vault_impl(&state, PW_NEW.into()).unwrap();
+        let reunlocked_key = current_key(&state);
+        let json2 = crypto::decrypt(&reunlocked_key, &enc, &nonce).unwrap();
+        let config2: TotpConfig = serde_json::from_slice(&json2).unwrap();
+        assert_eq!(config2.secret_base32, RFC_SECRET);
     }
 
     #[test]
