@@ -6,6 +6,7 @@ use tauri::State;
 use zeroize::Zeroizing;
 
 use crate::crypto;
+use crate::crypto::totp::TotpConfig;
 use crate::db::now_iso8601;
 use crate::error::AppError;
 use crate::state::{with_state, with_unlocked, AppState};
@@ -48,6 +49,11 @@ struct ExportEntry {
     created_at: String,
     updated_at: String,
     last_used_at: Option<String>,
+    /// Canonical TOTP config, present only for entries with a 2FA secret.
+    /// `#[serde(default)]` keeps version-1 export files (which lacked this
+    /// field) readable.
+    #[serde(default)]
+    totp: Option<TotpConfig>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -77,7 +83,8 @@ fn gather_payload(
         "SELECT e.title, e.username, e.url_or_app_name,
                 e.encrypted_password, e.password_nonce,
                 e.encrypted_notes, e.notes_nonce,
-                c.name, e.created_at, e.updated_at, e.last_used_at
+                c.name, e.created_at, e.updated_at, e.last_used_at,
+                e.encrypted_totp, e.totp_nonce
          FROM password_entries e
          LEFT JOIN categories c ON c.id = e.category_id
          ORDER BY e.id",
@@ -94,6 +101,8 @@ fn gather_payload(
         created_at: String,
         updated_at: String,
         last_used_at: Option<String>,
+        enc_totp: Option<Vec<u8>>,
+        totp_nonce: Option<Vec<u8>>,
     }
     let rows: Vec<Row> = stmt
         .query_map([], |r| {
@@ -109,6 +118,8 @@ fn gather_payload(
                 created_at: r.get(8)?,
                 updated_at: r.get(9)?,
                 last_used_at: r.get(10)?,
+                enc_totp: r.get(11)?,
+                totp_nonce: r.get(12)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -125,6 +136,16 @@ fn gather_payload(
             ),
             _ => None,
         };
+        let totp = match (row.enc_totp, row.totp_nonce) {
+            (Some(c), Some(n)) => {
+                let json = Zeroizing::new(crypto::decrypt(key, &c, &n)?);
+                Some(
+                    serde_json::from_slice::<TotpConfig>(&json)
+                        .map_err(|_| AppError::Crypto("stored TOTP config is invalid"))?,
+                )
+            }
+            _ => None,
+        };
         entries.push(ExportEntry {
             title: row.title,
             username: row.username,
@@ -135,6 +156,7 @@ fn gather_payload(
             created_at: row.created_at,
             updated_at: row.updated_at,
             last_used_at: row.last_used_at,
+            totp,
         });
     }
 
@@ -296,6 +318,16 @@ fn import_vault_impl(
                 }
                 _ => (None, None),
             };
+            let (totp_bytes, totp_nonce) = match &entry.totp {
+                Some(config) => {
+                    let json = Zeroizing::new(serde_json::to_vec(config).map_err(|_| {
+                        AppError::Internal("failed to serialize TOTP config".into())
+                    })?);
+                    let ct = crypto::encrypt(key, &json)?;
+                    (Some(ct.bytes), Some(ct.nonce.to_vec()))
+                }
+                None => (None, None),
+            };
             let category_id = entry
                 .category
                 .as_deref()
@@ -306,8 +338,9 @@ fn import_vault_impl(
                     (category_id, title, username, url_or_app_name,
                      encrypted_password, password_nonce,
                      encrypted_notes, notes_nonce,
+                     encrypted_totp, totp_nonce,
                      created_at, updated_at, last_used_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 rusqlite::params![
                     category_id,
                     entry.title,
@@ -317,6 +350,8 @@ fn import_vault_impl(
                     pw_ct.nonce.as_slice(),
                     notes_bytes,
                     notes_nonce,
+                    totp_bytes,
+                    totp_nonce,
                     entry.created_at,
                     entry.updated_at,
                     entry.last_used_at,
@@ -708,6 +743,55 @@ mod tests {
                 (title, pw, notes, cat)
             })
             .collect()
+    }
+
+    #[test]
+    fn export_import_preserves_totp_secrets() {
+        use crate::commands::entries::encrypt_totp;
+
+        // RFC 6238 SHA1 seed, base32-encoded.
+        const RFC_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+        let source = state_with_vault(PW);
+        add_entry(&source, "GitHub", "hunter2", None, None);
+        {
+            let key = **source.inner.lock().unwrap().key.as_ref().unwrap();
+            let (b, n) = encrypt_totp(&key, RFC_SECRET).unwrap();
+            let guard = source.inner.lock().unwrap();
+            guard
+                .conn
+                .execute(
+                    "UPDATE password_entries SET encrypted_totp = ?1, totp_nonce = ?2
+                     WHERE title = 'GitHub'",
+                    rusqlite::params![b, n],
+                )
+                .unwrap();
+        }
+
+        let file = TempFile::new("totp-roundtrip.json");
+        export_vault_impl(&source, PW.into(), &file.0).unwrap();
+
+        let target = state_with_vault(PW);
+        import_vault_impl(&target, &file.0, PW.into()).unwrap();
+
+        // The imported entry must carry the TOTP secret, decryptable under the
+        // target vault key and reproducing the original secret. Before the fix
+        // the export dropped it and the imported entry had no TOTP.
+        let (enc, nonce): (Vec<u8>, Vec<u8>) = {
+            let guard = target.inner.lock().unwrap();
+            guard
+                .conn
+                .query_row(
+                    "SELECT encrypted_totp, totp_nonce FROM password_entries WHERE title = 'GitHub'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap()
+        };
+        let key = **target.inner.lock().unwrap().key.as_ref().unwrap();
+        let json = crypto::decrypt(&key, &enc, &nonce).unwrap();
+        let config: TotpConfig = serde_json::from_slice(&json).unwrap();
+        assert_eq!(config.secret_base32, RFC_SECRET);
     }
 
     #[test]
