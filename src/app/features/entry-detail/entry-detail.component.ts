@@ -43,6 +43,9 @@ export class EntryDetailComponent implements OnDestroy {
   private hideTimer: ReturnType<typeof setTimeout> | null = null;
   private totpTimer: ReturnType<typeof setInterval> | null = null;
   private totpEntryId: number | null = null;
+  // Bumped on every load() so a slower in-flight load can detect it was
+  // superseded by a newer navigation and skip mutating state.
+  private loadToken = 0;
 
   constructor() {
     this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((params) => {
@@ -77,6 +80,7 @@ export class EntryDetailComponent implements OnDestroy {
   }
 
   private async load(id: number): Promise<void> {
+    const token = ++this.loadToken;
     this.loading.set(true);
     this.error.set(null);
     this.entry.set(null);
@@ -86,14 +90,18 @@ export class EntryDetailComponent implements OnDestroy {
     this.totpCode.set(null);
     try {
       const e = await this.entries.get(id);
+      // A newer navigation started while this get() was in flight; drop the
+      // stale result so we don't display it or start a leaked TOTP timer.
+      if (token !== this.loadToken) return;
       this.entry.set(e);
       if (e.hasTotp) {
         void this.startTotp(e.id);
       }
     } catch (err) {
+      if (token !== this.loadToken) return;
       this.error.set(formatBackendError(err));
     } finally {
-      this.loading.set(false);
+      if (token === this.loadToken) this.loading.set(false);
     }
   }
 
@@ -104,8 +112,9 @@ export class EntryDetailComponent implements OnDestroy {
   private async startTotp(id: number): Promise<void> {
     this.totpEntryId = id;
     await this.refreshTotp();
-    // Only start ticking if the first fetch succeeded.
-    if (this.totpCode() !== null && this.totpTimer === null) {
+    // Only start ticking if this is still the active entry and the first fetch
+    // succeeded.
+    if (this.totpEntryId === id && this.totpCode() !== null && this.totpTimer === null) {
       this.totpTimer = setInterval(() => this.tickTotp(), 1000);
     }
   }
@@ -169,7 +178,11 @@ export class EntryDetailComponent implements OnDestroy {
   }
 
   protected async copy(value: string, label: string): Promise<void> {
-    await this.clipboard.copy(value, label);
+    try {
+      await this.clipboard.copy(value, label);
+    } catch (err) {
+      this.error.set(formatBackendError(err));
+    }
   }
 
   protected async toggleFavorite(): Promise<void> {
