@@ -412,7 +412,15 @@ fn parse_csv(input: &str) -> Vec<Vec<String>> {
         }
         match c {
             '"' => {
-                in_quotes = true;
+                // A quote only opens a quoted field at the field's start. A
+                // stray quote inside an unquoted field is treated as a literal
+                // character (matching lenient real-world parsers) rather than
+                // re-entering quote mode and swallowing the rest of the file.
+                if field.is_empty() {
+                    in_quotes = true;
+                } else {
+                    field.push('"');
+                }
                 dirty = true;
             }
             ',' => {
@@ -478,36 +486,12 @@ fn import_csv_content_impl(state: &AppState, csv: &str) -> Result<CsvImportSumma
         let tx = s.conn.transaction()?;
         let now = now_iso8601();
 
-        // Create/reuse the categories referenced by any row (UNIQUE by name).
+        // Categories are created lazily inside the loop, only for rows that are
+        // actually imported, so a skipped (e.g. password-less) row never leaves
+        // behind an empty orphan category.
         let mut category_ids: std::collections::HashMap<String, i64> =
             std::collections::HashMap::new();
         let mut categories_created = 0usize;
-        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for row in &data {
-            let name = cell(row, c_cat).trim();
-            if !name.is_empty() {
-                names.insert(name.to_string());
-            }
-        }
-        for name in &names {
-            let existing: Option<i64> = tx
-                .query_row("SELECT id FROM categories WHERE name = ?1", [name], |r| {
-                    r.get(0)
-                })
-                .ok();
-            let id = match existing {
-                Some(id) => id,
-                None => {
-                    tx.execute(
-                        "INSERT INTO categories (name, created_at, updated_at) VALUES (?1, ?2, ?2)",
-                        rusqlite::params![name, now],
-                    )?;
-                    categories_created += 1;
-                    tx.last_insert_rowid()
-                }
-            };
-            category_ids.insert(name.clone(), id);
-        }
 
         let mut imported = 0usize;
         let mut skipped = 0usize;
@@ -554,7 +538,33 @@ fn import_csv_content_impl(state: &AppState, csv: &str) -> Result<CsvImportSumma
             let category_id = if category.is_empty() {
                 None
             } else {
-                category_ids.get(category).copied()
+                let id = match category_ids.get(category) {
+                    Some(&id) => id,
+                    None => {
+                        let existing: Option<i64> = tx
+                            .query_row(
+                                "SELECT id FROM categories WHERE name = ?1",
+                                [category],
+                                |r| r.get(0),
+                            )
+                            .ok();
+                        let id = match existing {
+                            Some(id) => id,
+                            None => {
+                                tx.execute(
+                                    "INSERT INTO categories (name, created_at, updated_at)
+                                     VALUES (?1, ?2, ?2)",
+                                    rusqlite::params![category, now],
+                                )?;
+                                categories_created += 1;
+                                tx.last_insert_rowid()
+                            }
+                        };
+                        category_ids.insert(category.to_string(), id);
+                        id
+                    }
+                };
+                Some(id)
             };
 
             tx.execute(
@@ -955,6 +965,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_csv_treats_a_stray_quote_in_an_unquoted_field_as_literal() {
+        // The note field ends with a literal `"` the exporter failed to quote.
+        // It must be kept as a literal character, not re-enter quote mode and
+        // swallow the following row.
+        let records = parse_csv("name,note\nSite A,size is 15\"\nSite B,ok\n");
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0], vec!["name", "note"]);
+        assert_eq!(records[1], vec!["Site A", "size is 15\""]);
+        assert_eq!(records[2], vec!["Site B", "ok"]);
+    }
+
+    #[test]
     fn import_chrome_csv_creates_entries() {
         let state = state_with_vault(PW);
         let csv = "name,url,username,password,note\n\
@@ -987,6 +1009,35 @@ mod tests {
         let github = entries.iter().find(|e| e.0 == "GitHub").unwrap();
         assert_eq!(github.1, "hunter2");
         assert_eq!(github.3.as_deref(), Some("Work")); // category
+    }
+
+    #[test]
+    fn import_csv_does_not_create_categories_for_skipped_rows() {
+        let state = state_with_vault(PW);
+        // 'Archive' is referenced only by a password-less row that gets skipped,
+        // so it must not be created as an empty orphan category.
+        let csv = "folder,name,username,password\n\
+                   Archive,Old Site,alice,\n\
+                   Work,GitHub,bob,hunter2\n";
+        let summary = import_csv_content_impl(&state, csv).unwrap();
+        assert_eq!(summary.imported, 1);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.categories_created, 1);
+
+        let cat_names: Vec<String> = {
+            let guard = state.inner.lock().unwrap();
+            let mut stmt = guard
+                .conn
+                .prepare("SELECT name FROM categories ORDER BY name")
+                .unwrap();
+            let names = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            names
+        };
+        assert_eq!(cat_names, vec!["Work".to_string()]);
     }
 
     #[test]
