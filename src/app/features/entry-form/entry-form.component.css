@@ -44,6 +44,12 @@ select:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+.checkbox,
+.totp-remove {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+}
 .pw-row {
   display: flex;
   gap: 0.4rem;
