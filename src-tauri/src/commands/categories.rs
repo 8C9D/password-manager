@@ -14,12 +14,16 @@ pub struct Category {
     pub updated_at: String,
 }
 
+pub(crate) const MAX_CATEGORY_NAME_CHARS: usize = 64;
+
 pub(crate) fn validate_name(name: &str) -> Result<String, AppError> {
     let trimmed = name.trim().to_string();
     if trimmed.is_empty() {
         return Err(AppError::Validation("category name is required"));
     }
-    if trimmed.len() > 64 {
+    // Counted in characters, not bytes: `len()` would cut a name of non-ASCII
+    // characters off at a third of the documented limit.
+    if trimmed.chars().count() > MAX_CATEGORY_NAME_CHARS {
         return Err(AppError::Validation("category name must be 64 chars or fewer"));
     }
     Ok(trimmed)
@@ -242,5 +246,21 @@ mod tests {
         assert_eq!(cats.len(), 1);
         assert_eq!(cats[0].id, id);
         assert_eq!(cats[0].name, name);
+    }
+
+    #[test]
+    fn the_length_limit_counts_characters_not_bytes() {
+        let state = unlocked_state();
+        // 64 three-byte characters is 192 bytes: a byte-based check would reject
+        // this despite the message promising 64 chars.
+        let name = "日".repeat(64);
+        create_category_impl(&state, name.clone()).unwrap();
+        assert_eq!(list_categories_impl(&state).unwrap()[0].name, name);
+
+        // 65 is still over the limit.
+        assert!(matches!(
+            create_category_impl(&state, "日".repeat(65)),
+            Err(AppError::Validation(_))
+        ));
     }
 }

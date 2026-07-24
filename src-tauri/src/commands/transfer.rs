@@ -284,7 +284,45 @@ fn export_vault_impl(
     };
     let json = serde_json::to_string_pretty(&file)
         .map_err(|e| AppError::Internal(format!("export serialization failed: {e}")))?;
-    std::fs::write(path, json)?;
+    write_atomically(path, json.as_bytes())?;
+    Ok(())
+}
+
+/// Write `bytes` to `path` via a temporary file in the same directory, then
+/// rename it into place.
+///
+/// A plain write truncates the destination first, so exporting over an existing
+/// backup and then failing (full disk, crash) would destroy the good backup and
+/// leave a truncated file that still looks like an export. Rename within a
+/// directory is atomic, so the destination is either the old file or the
+/// complete new one.
+fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
+    use std::io::Write;
+
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or(AppError::Validation("export path has no file name"))?;
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(file_name);
+    tmp_name.push(".partial");
+    let tmp = dir.join(tmp_name);
+
+    let write_result = (|| -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        // Flush to disk before the rename, so a crash can't leave the renamed
+        // file present but empty.
+        f.sync_all()
+    })();
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
     Ok(())
 }
 
@@ -617,6 +655,16 @@ fn is_truthy(cell: &str) -> bool {
     matches!(cell.trim().to_lowercase().as_str(), "1" | "true" | "yes")
 }
 
+/// Clip a CSV folder name to the category-name limit, cutting on a character
+/// boundary. Borrows unchanged when it already fits.
+fn truncate_category_name(name: &str) -> std::borrow::Cow<'_, str> {
+    use crate::commands::categories::MAX_CATEGORY_NAME_CHARS;
+    if name.chars().count() <= MAX_CATEGORY_NAME_CHARS {
+        return std::borrow::Cow::Borrowed(name);
+    }
+    std::borrow::Cow::Owned(name.chars().take(MAX_CATEGORY_NAME_CHARS).collect())
+}
+
 fn import_csv_content_impl(state: &AppState, csv: &str) -> Result<CsvImportSummary, AppError> {
     // Strip a leading UTF-8 BOM that Excel/Chrome exports sometimes prepend.
     let csv = csv.strip_prefix('\u{feff}').unwrap_or(csv);
@@ -692,6 +740,13 @@ fn import_csv_content_impl(state: &AppState, csv: &str) -> Result<CsvImportSumma
                     Err(_) => (None, None),
                 }
             };
+            // Foreign CSVs carry arbitrarily long folder names. Truncating keeps
+            // the grouping (leniency is this path's whole contract) while
+            // holding the row to the same cap create_category enforces - an
+            // over-long name would otherwise import fine and then be
+            // un-renameable, because update_category rejects it.
+            let category = truncate_category_name(category);
+            let category = category.as_ref();
             let category_id = if category.is_empty() {
                 None
             } else {
@@ -1109,6 +1164,86 @@ mod tests {
         rows.into_iter()
             .map(|(c, n)| String::from_utf8(crypto::decrypt(&key, &c, &n).unwrap()).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn atomic_write_replaces_an_existing_file_and_leaves_no_temp() {
+        let file = TempFile::new("atomic-replace.json");
+        std::fs::write(&file.0, b"previous export").unwrap();
+        write_atomically(&file.0, b"new export").unwrap();
+        assert_eq!(std::fs::read(&file.0).unwrap(), b"new export");
+
+        let tmp = file
+            .0
+            .parent()
+            .unwrap()
+            .join(format!(".{}.partial", file.0.file_name().unwrap().to_str().unwrap()));
+        assert!(!tmp.exists(), "temp file must not survive a successful write");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_atomic_write_keeps_the_previous_file_intact() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("pm-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("backup.json");
+        std::fs::write(&target, b"the good backup").unwrap();
+
+        // A read-only directory makes the temp file uncreatable. The property
+        // under test is that a failed export reports the error and leaves the
+        // destination untouched, with no half-written file to mistake for a
+        // backup. (Trade-off: this case - unwritable directory, writable
+        // existing file - is one the old truncate-in-place write could still
+        // complete. Refusing it is the price of never clobbering a good backup.)
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = write_atomically(&target, b"replacement that cannot be written");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(result.is_err(), "the write must report the failure");
+        assert_eq!(std::fs::read(&target).unwrap(), b"the good backup");
+        assert!(!dir.join(".backup.json.partial").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn csv_import_truncates_an_over_long_folder_name() {
+        let state = state_with_vault(PW);
+        let long = "x".repeat(200);
+        let csv = format!("name,password,folder\nSite,pw1,{long}\n");
+        import_csv_content_impl(&state, &csv).unwrap();
+
+        let name: String = state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row("SELECT name FROM categories", [], |r| r.get(0))
+            .unwrap();
+        // Held to the same cap create_category enforces, so the imported
+        // category stays renameable in the UI afterwards.
+        assert_eq!(name.chars().count(), 64);
+        assert!(crate::commands::categories::validate_name(&name).is_ok());
+    }
+
+    #[test]
+    fn csv_import_truncates_multibyte_folder_names_on_a_char_boundary() {
+        let state = state_with_vault(PW);
+        // 100 three-byte characters: a byte-based cut would slice one in half.
+        let long = "日".repeat(100);
+        let csv = format!("name,password,folder\nSite,pw1,{long}\n");
+        import_csv_content_impl(&state, &csv).unwrap();
+
+        let name: String = state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row("SELECT name FROM categories", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "日".repeat(64));
     }
 
     #[test]

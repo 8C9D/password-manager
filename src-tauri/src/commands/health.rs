@@ -114,8 +114,17 @@ fn audit_vault_impl(state: &AppState) -> Result<VaultHealth, AppError> {
         for (id, title, enc, nonce, changed_at) in raw {
             let pw = Zeroizing::new(crypto::decrypt(key, &enc, &nonce)?);
             let password_hash: [u8; 32] = Sha256::digest(pw.as_slice()).into();
-            let pw_str = String::from_utf8_lossy(&pw);
-            let weak = is_weak(&pw_str);
+            // from_utf8_lossy borrows for valid UTF-8 (every password written by
+            // this app) but allocates a plain String otherwise. That fallback
+            // copy has no Drop, so it must be wrapped to be wiped rather than
+            // left in the heap after a corrupt row is scanned.
+            let weak = match std::str::from_utf8(&pw) {
+                Ok(s) => is_weak(s),
+                Err(_) => {
+                    let lossy = Zeroizing::new(String::from_utf8_lossy(&pw).into_owned());
+                    is_weak(&lossy)
+                }
+            };
             let stale = is_stale(&changed_at, now);
             *hash_counts.entry(password_hash).or_insert(0) += 1;
             scanned.push(ScannedEntry {
