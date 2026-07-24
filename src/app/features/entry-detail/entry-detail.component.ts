@@ -43,6 +43,7 @@ export class EntryDetailComponent implements OnDestroy {
   private hideTimer: ReturnType<typeof setTimeout> | null = null;
   private totpTimer: ReturnType<typeof setInterval> | null = null;
   private totpEntryId: number | null = null;
+  private totpRefreshing = false;
   // Bumped on every load() so a slower in-flight load can detect it was
   // superseded by a newer navigation and skip mutating state.
   private loadToken = 0;
@@ -120,16 +121,26 @@ export class EntryDetailComponent implements OnDestroy {
   }
 
   private async refreshTotp(): Promise<void> {
-    if (this.totpEntryId === null) return;
+    // Single-flight: the 1s tick keeps firing while remaining <= 0, and a
+    // second concurrent refresh could interleave with this one's completion.
+    const id = this.totpEntryId;
+    if (id === null || this.totpRefreshing) return;
+    this.totpRefreshing = true;
     try {
-      const t = await this.entries.generateTotp(this.totpEntryId);
+      const t = await this.entries.generateTotp(id);
+      // The user navigated to another entry while this refresh was in
+      // flight; dropping the result keeps A's code off B's page.
+      if (this.totpEntryId !== id) return;
       this.totpCode.set(t.code);
       this.totpRemaining.set(t.secondsRemaining);
       this.totpPeriod.set(t.period);
     } catch {
+      if (this.totpEntryId !== id) return;
       // Leave the rest of the entry usable; just drop the code display.
       this.stopTotp();
       this.totpCode.set(null);
+    } finally {
+      this.totpRefreshing = false;
     }
   }
 
@@ -194,6 +205,9 @@ export class EntryDetailComponent implements OnDestroy {
     try {
       await this.entries.setFavorite(e.id, next);
     } catch (err) {
+      // Only revert if the pane still shows this entry; after a navigation
+      // the revert would resurrect the previous entry's data.
+      if (this.entry()?.id !== e.id) return;
       this.entry.set({ ...e, favorite: e.favorite });
       this.error.set(formatBackendError(err));
     }

@@ -45,6 +45,13 @@
   padding: 0.4rem 1rem;
   font-size: 0.85rem;
 }
+.lock-error-banner {
+  background: #fdecec;
+  border-bottom: 1px solid #f0b6b6;
+  color: var(--danger);
+  padding: 0.4rem 1rem;
+  font-size: 0.85rem;
+}
 .cols {
   display: grid;
   grid-template-columns: 220px 320px 1fr;

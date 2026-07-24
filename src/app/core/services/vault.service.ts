@@ -2,6 +2,8 @@ import { computed, inject, Injectable, signal } from '@angular/core';
 
 import { VaultStatus } from '../models/entry.model';
 import { CategoryService } from './category.service';
+import { ClipboardService } from './clipboard.service';
+import { ConfirmService } from './confirm.service';
 import { PasswordEntryService } from './password-entry.service';
 import { call } from './tauri-invoke';
 
@@ -9,6 +11,8 @@ import { call } from './tauri-invoke';
 export class VaultService {
   private readonly entries = inject(PasswordEntryService);
   private readonly categories = inject(CategoryService);
+  private readonly clipboard = inject(ClipboardService);
+  private readonly confirm = inject(ConfirmService);
 
   readonly status = signal<VaultStatus | null>(null);
   readonly isUnlocked = computed(() => this.status()?.unlocked ?? false);
@@ -42,9 +46,12 @@ export class VaultService {
   async lock(): Promise<void> {
     await call<void>('lock_vault');
     // Purge cached vault state so entry/category metadata doesn't linger in
-    // memory (or flash on screen) after the vault is locked.
+    // memory (or flash on screen) after the vault is locked. The clipboard
+    // banner and any open confirm dialog belong to the unlocked session too.
     this.entries.clear();
     this.categories.clear();
+    this.clipboard.reset();
+    this.confirm.dismiss();
     await this.refreshStatus();
   }
 
@@ -53,11 +60,22 @@ export class VaultService {
   }
 
   async importVault(path: string, password: string): Promise<ImportSummary> {
-    return call<ImportSummary>('import_vault', { path, password });
+    const summary = await call<ImportSummary>('import_vault', { path, password });
+    await this.refreshAfterImport();
+    return summary;
   }
 
   async importCsv(path: string): Promise<CsvImportSummary> {
-    return call<CsvImportSummary>('import_csv', { path });
+    const summary = await call<CsvImportSummary>('import_csv', { path });
+    await this.refreshAfterImport();
+    return summary;
+  }
+
+  // The entry list and sidebar live in the persistent vault layout and only
+  // load once per unlock; without an explicit refresh, imported entries and
+  // categories stay invisible until the next lock/unlock cycle.
+  private async refreshAfterImport(): Promise<void> {
+    await Promise.all([this.entries.list(), this.categories.list()]);
   }
 }
 

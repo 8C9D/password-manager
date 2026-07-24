@@ -1,4 +1,11 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
+import {
+  Component,
+  inject,
+  OnDestroy,
+  OnInit,
+  signal,
+  WritableSignal,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { open, save } from '@tauri-apps/plugin-dialog';
@@ -28,9 +35,35 @@ const PRESETS: Preset[] = [
   templateUrl: './settings.component.html',
   styleUrl: './settings.component.css',
 })
-export class SettingsComponent implements OnInit {
+export class SettingsComponent implements OnInit, OnDestroy {
   private readonly settings = inject(SettingsService);
   private readonly vault = inject(VaultService);
+
+  // One tracked timer per message signal: a re-save within the flash window
+  // must restart its own timer, not have the message wiped early by the
+  // previous save's timer; all are cancelled on destroy.
+  private readonly flashTimers = new Map<
+    WritableSignal<string | null>,
+    ReturnType<typeof setTimeout>
+  >();
+
+  private flash(sig: WritableSignal<string | null>, text: string, ms: number): void {
+    sig.set(text);
+    const prev = this.flashTimers.get(sig);
+    if (prev !== undefined) clearTimeout(prev);
+    this.flashTimers.set(
+      sig,
+      setTimeout(() => {
+        sig.set(null);
+        this.flashTimers.delete(sig);
+      }, ms),
+    );
+  }
+
+  ngOnDestroy(): void {
+    for (const timer of this.flashTimers.values()) clearTimeout(timer);
+    this.flashTimers.clear();
+  }
 
   protected readonly presets = PRESETS;
   protected autoLockSecs = 300;
@@ -83,8 +116,7 @@ export class SettingsComponent implements OnInit {
         autoLockSecs: secs,
         clipboardClearSecs: clearSecs,
       });
-      this.savedMsg.set('Settings saved.');
-      setTimeout(() => this.savedMsg.set(null), 3000);
+      this.flash(this.savedMsg, 'Settings saved.', 3000);
     } catch (e) {
       this.errorMsg.set(formatBackendError(e));
     } finally {
@@ -117,8 +149,7 @@ export class SettingsComponent implements OnInit {
       if (!path) return;
       await this.vault.exportVault(this.exportPw, path);
       this.exportPw = '';
-      this.exportSavedMsg.set('Encrypted export saved.');
-      setTimeout(() => this.exportSavedMsg.set(null), 5000);
+      this.flash(this.exportSavedMsg, 'Encrypted export saved.', 5000);
     } catch (e) {
       this.exportErrorMsg.set(
         formatBackendError(e, {
@@ -218,8 +249,7 @@ export class SettingsComponent implements OnInit {
       this.newPw2 = '';
       this.showCurrentPw.set(false);
       this.showNewPw.set(false);
-      this.pwSavedMsg.set('Master password changed.');
-      setTimeout(() => this.pwSavedMsg.set(null), 3000);
+      this.flash(this.pwSavedMsg, 'Master password changed.', 3000);
     } catch (e) {
       this.pwErrorMsg.set(
         formatBackendError(e, {

@@ -55,4 +55,12 @@ export class ConfirmService {
     this.state.set(CLOSED);
     fn?.(ok);
   }
+
+  // Close any open dialog as if cancelled. Called when the vault locks so a
+  // pending confirmation (which may show entry titles, and whose global
+  // Enter handler would swallow the unlock form's submit) cannot outlive the
+  // session it belongs to.
+  dismiss(): void {
+    this.resolve(false);
+  }
 }

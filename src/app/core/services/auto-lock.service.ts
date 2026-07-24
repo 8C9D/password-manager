@@ -6,6 +6,10 @@ import { VaultService } from './vault.service';
 
 const ACTIVITY_EVENTS = ['mousemove', 'keydown', 'mousedown', 'wheel', 'touchstart'] as const;
 
+// If the backend lock call fails, retry soon instead of leaving the vault
+// unlocked forever with no further attempts.
+const LOCK_RETRY_SECS = 5;
+
 @Injectable({ providedIn: 'root' })
 export class AutoLockService {
   private readonly vault = inject(VaultService);
@@ -71,8 +75,17 @@ export class AutoLockService {
     if (!this.vault.isUnlocked()) return;
     try {
       await this.vault.lock();
-    } finally {
+    } catch {
+      // Navigating now would bounce straight back (the vault is still
+      // unlocked), and giving up would leave it unlocked forever.
+      this.scheduleTimer(LOCK_RETRY_SECS);
+      return;
+    }
+    try {
       await this.router.navigate(['/unlock']);
+    } catch {
+      // The vault IS locked; the route guard redirects on the next
+      // navigation, so a failed redirect here loses nothing.
     }
   }
 }

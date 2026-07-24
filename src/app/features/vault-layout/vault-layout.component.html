@@ -15,6 +15,9 @@
     <a routerLink="/vault/settings" class="btn" title="Settings">⚙</a>
     <button class="btn" type="button" (click)="onLock()">Lock</button>
   </header>
+  @if (lockError(); as msg) {
+    <div class="lock-error-banner">Failed to lock the vault: {{ msg }}</div>
+  }
   @if (clipboard.lastCopiedLabel(); as label) {
     <div class="clipboard-banner">
       Copied {{ label }} — auto-clears in {{ clipboard.remainingSecs() }}s.

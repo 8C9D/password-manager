@@ -29,6 +29,10 @@ export class PasswordGeneratorPanelComponent implements OnInit {
   protected readonly busy = signal(false);
 
   private regenScheduled = false;
+  // Bumped per request so an out-of-order response (slider drags fire many
+  // overlapping generate calls) can't display a password that doesn't match
+  // the currently selected options.
+  private regenSeq = 0;
 
   ngOnInit(): void {
     void this.regenerate();
@@ -39,16 +43,19 @@ export class PasswordGeneratorPanelComponent implements OnInit {
     this.regenScheduled = true;
     queueMicrotask(async () => {
       this.regenScheduled = false;
+      const seq = ++this.regenSeq;
       this.busy.set(true);
       this.error.set(null);
       try {
         const pw = await this.generator.generate(this.opts);
+        if (seq !== this.regenSeq) return;
         this.current.set(pw);
       } catch (e) {
+        if (seq !== this.regenSeq) return;
         this.current.set('');
         this.error.set(formatBackendError(e));
       } finally {
-        this.busy.set(false);
+        if (seq === this.regenSeq) this.busy.set(false);
       }
     });
   }

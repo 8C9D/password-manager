@@ -64,11 +64,18 @@ export class EntryFormComponent implements OnInit {
   async ngOnInit(): Promise<void> {
     const idParam = this.route.snapshot.paramMap.get('id');
     const id = idParam ? Number(idParam) : null;
+    if (id !== null && (!Number.isFinite(id) || id <= 0)) {
+      // A garbage edit URL must not fall through to an empty form whose
+      // submit would then call update() with a nonsense id.
+      this.errorMsg.set('Invalid entry id.');
+      this.loading.set(false);
+      return;
+    }
     this.editingId.set(id);
     try {
       await this.categoriesSvc.list();
       this.categories.set(this.categoriesSvc.categories());
-      if (id !== null && Number.isFinite(id) && id > 0) {
+      if (id !== null) {
         const full = await this.entries.get(id);
         this.title = full.title;
         this.username = full.username;
