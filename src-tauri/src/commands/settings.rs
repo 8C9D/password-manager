@@ -42,10 +42,18 @@ pub(crate) fn clipboard_clear_secs(conn: &rusqlite::Connection) -> u64 {
     .clamp(MIN_CLIPBOARD_CLEAR_SECS, MAX_CLIPBOARD_CLEAR_SECS)
 }
 
+/// Stored auto-lock timeout, clamped on read for the same reason as the
+/// clipboard delay: a hand-edited row (e.g. 0 or an absurdly large value)
+/// must not be able to weaken or disable auto-lock.
+fn auto_lock_secs(conn: &rusqlite::Connection) -> u64 {
+    read_u64_setting(conn, "auto_lock_secs", DEFAULT_AUTO_LOCK_SECS)
+        .clamp(MIN_AUTO_LOCK_SECS, MAX_AUTO_LOCK_SECS)
+}
+
 fn get_settings_impl(state: &AppState) -> Result<Settings, AppError> {
     with_state(state, |s| {
         Ok(Settings {
-            auto_lock_secs: read_u64_setting(&s.conn, "auto_lock_secs", DEFAULT_AUTO_LOCK_SECS),
+            auto_lock_secs: auto_lock_secs(&s.conn),
             clipboard_clear_secs: clipboard_clear_secs(&s.conn),
         })
     })
@@ -122,6 +130,31 @@ mod tests {
         let s = get_settings_impl(&state).unwrap();
         assert_eq!(s.auto_lock_secs, DEFAULT_AUTO_LOCK_SECS);
         assert_eq!(s.clipboard_clear_secs, DEFAULT_CLIPBOARD_CLEAR_SECS);
+    }
+
+    #[test]
+    fn get_clamps_hand_edited_auto_lock_rows() {
+        let state = unlocked_state();
+        let write = |value: &str| {
+            state
+                .inner
+                .lock()
+                .unwrap()
+                .conn
+                .execute(
+                    "INSERT INTO settings (key, value, updated_at)
+                     VALUES ('auto_lock_secs', ?1, '2026-01-01T00:00:00Z')
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    [value],
+                )
+                .unwrap();
+        };
+        // A row edited to 0 (or anything under the minimum) must not disable
+        // auto-lock; an absurdly large value must not effectively disable it.
+        write("0");
+        assert_eq!(get_settings_impl(&state).unwrap().auto_lock_secs, MIN_AUTO_LOCK_SECS);
+        write("99999999");
+        assert_eq!(get_settings_impl(&state).unwrap().auto_lock_secs, MAX_AUTO_LOCK_SECS);
     }
 
     #[test]

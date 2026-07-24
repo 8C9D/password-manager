@@ -24,6 +24,19 @@ pub(crate) fn is_our_clipboard_value(current: Option<&str>, ours: &str) -> bool 
     current == Some(ours)
 }
 
+/// Whether a delayed clear task still owns the clipboard: it must be the most
+/// recent copy (generation match) AND the stored token must still be its
+/// value. Generation alone distinguishes two copies of the same secret; the
+/// earlier task must not clear at its (now superseded) deadline.
+pub(crate) fn clear_task_owns_clipboard(
+    state_generation: u64,
+    task_generation: u64,
+    state_token: Option<&str>,
+    task_token: &str,
+) -> bool {
+    state_generation == task_generation && is_our_clipboard_value(state_token, task_token)
+}
+
 #[tauri::command]
 pub fn copy_to_clipboard(
     app: AppHandle,
@@ -41,9 +54,10 @@ pub fn copy_to_clipboard(
         .write_text(value.clone())
         .map_err(|e| AppError::Internal(format!("clipboard write failed: {e}")))?;
 
-    with_state(&state, |s| {
+    let generation = with_state(&state, |s| {
         s.clipboard_token = Some(value.clone());
-        Ok(())
+        s.clipboard_generation += 1;
+        Ok(s.clipboard_generation)
     })?;
 
     let app_for_task = app.clone();
@@ -56,7 +70,12 @@ pub fn copy_to_clipboard(
                     Ok(g) => g,
                     Err(_) => return,
                 };
-                let matches = is_our_clipboard_value(guard.clipboard_token.as_deref(), &token);
+                let matches = clear_task_owns_clipboard(
+                    guard.clipboard_generation,
+                    generation,
+                    guard.clipboard_token.as_deref(),
+                    &token,
+                );
                 if matches {
                     guard.clipboard_token = None;
                 }
@@ -88,6 +107,18 @@ mod tests {
         assert_eq!(clamp_clear_secs(MAX_CLIPBOARD_CLEAR_SECS), MAX_CLIPBOARD_CLEAR_SECS);
         assert_eq!(clamp_clear_secs(MAX_CLIPBOARD_CLEAR_SECS + 1), MAX_CLIPBOARD_CLEAR_SECS);
         assert_eq!(clamp_clear_secs(u64::MAX), MAX_CLIPBOARD_CLEAR_SECS);
+    }
+
+    #[test]
+    fn clear_task_yields_to_a_newer_copy_of_the_same_value() {
+        // Copy A at gen 1, copy A again at gen 2: the first task's deadline
+        // must no-op so the second copy gets the full delay it returned.
+        assert!(!clear_task_owns_clipboard(2, 1, Some("s3cret"), "s3cret"));
+        // The newest task still clears.
+        assert!(clear_task_owns_clipboard(2, 2, Some("s3cret"), "s3cret"));
+        // Generation match alone is not enough; the token must still be ours.
+        assert!(!clear_task_owns_clipboard(2, 2, Some("other"), "s3cret"));
+        assert!(!clear_task_owns_clipboard(2, 2, None, "s3cret"));
     }
 
     #[test]

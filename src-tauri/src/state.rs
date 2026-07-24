@@ -15,6 +15,10 @@ pub struct AppStateInner {
     pub conn: Connection,
     pub key: Option<VaultKey>,
     pub clipboard_token: Option<String>,
+    /// Bumped on every copy so a stale clear task can recognize it was
+    /// superseded, even when the same value was copied again (the token
+    /// alone can't distinguish the two copies).
+    pub clipboard_generation: u64,
     /// Consecutive failed unlock attempts, reset on a successful unlock.
     pub failed_unlocks: u32,
     /// When the last failed unlock happened, for computing the backoff window.
@@ -28,6 +32,7 @@ impl AppState {
                 conn,
                 key: None,
                 clipboard_token: None,
+                clipboard_generation: 0,
                 failed_unlocks: 0,
                 last_failed_unlock: None,
             }),
