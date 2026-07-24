@@ -340,6 +340,10 @@ fn import_vault_impl(
             };
             let (totp_bytes, totp_nonce) = match &entry.totp {
                 Some(config) => {
+                    // The config comes straight off the (possibly hand-edited)
+                    // file and would otherwise be stored without ever passing
+                    // the invariants build_config enforces.
+                    config.validate()?;
                     let json = Zeroizing::new(serde_json::to_vec(config).map_err(|_| {
                         AppError::Internal("failed to serialize TOTP config".into())
                     })?);
@@ -1029,6 +1033,45 @@ mod tests {
                 ("GitHub".into(), "hunter2".into(), None, Some("Work".into())),
             ]
         );
+    }
+
+    #[test]
+    fn import_rejects_invalid_totp_config_and_rolls_back() {
+        // Hand-craft an export whose TOTP config has digits=12; storing it
+        // would later overflow 10^digits in code generation.
+        let payload = serde_json::json!({
+            "categories": [],
+            "entries": [{
+                "title": "X", "username": "u", "urlOrAppName": "x",
+                "password": "pw", "notes": null, "category": null,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "updatedAt": "2026-01-01T00:00:00Z",
+                "lastUsedAt": null,
+                "totp": {
+                    "secret_base32": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+                    "algorithm": "SHA1", "digits": 12, "period": 30
+                }
+            }],
+            "settings": {"autoLockSecs": null}
+        });
+        let salt = crypto::generate_salt();
+        let key = crypto::derive_key(PW, &salt).unwrap();
+        let ct = crypto::encrypt(&key, &serde_json::to_vec(&payload).unwrap()).unwrap();
+        let file_json = serde_json::json!({
+            "format": EXPORT_FORMAT,
+            "formatVersion": EXPORT_FORMAT_VERSION,
+            "kdfAlgorithm": "argon2id",
+            "salt": B64.encode(salt),
+            "nonce": B64.encode(ct.nonce),
+            "ciphertext": B64.encode(&ct.bytes),
+        });
+        let file = TempFile::new("bad-totp.json");
+        std::fs::write(&file.0, serde_json::to_vec(&file_json).unwrap()).unwrap();
+
+        let state = state_with_vault(PW);
+        let err = import_vault_impl(&state, &file.0, PW.into()).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+        assert!(decrypted_entries(&state).is_empty(), "nothing imported");
     }
 
     #[test]

@@ -39,6 +39,26 @@ pub struct TotpConfig {
     pub period: u64,
 }
 
+impl TotpConfig {
+    /// Enforce the invariants every stored config must hold. Deserialized
+    /// configs (e.g. from an import file) bypass `build_config`, and an
+    /// out-of-range `digits` would make `hotp`'s `10u32.pow(digits)` overflow.
+    pub fn validate(&self) -> Result<(), AppError> {
+        let decoded = base32_decode(&self.secret_base32)
+            .ok_or(AppError::Validation("invalid TOTP secret"))?;
+        if decoded.is_empty() {
+            return Err(AppError::Validation("TOTP secret is empty"));
+        }
+        if !(MIN_DIGITS..=MAX_DIGITS).contains(&self.digits) {
+            return Err(AppError::Validation("TOTP digits must be between 6 and 8"));
+        }
+        if self.period == 0 {
+            return Err(AppError::Validation("TOTP period must be positive"));
+        }
+        Ok(())
+    }
+}
+
 /// A generated code together with the time metadata a live countdown needs.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -110,9 +130,9 @@ fn hotp(algorithm: TotpAlgorithm, secret: &[u8], counter: u64, digits: u32) -> S
 
 /// Generate the TOTP code for the given wall-clock time (Unix seconds).
 pub fn generate(config: &TotpConfig, unix_seconds: u64) -> Result<GeneratedTotp, AppError> {
-    if config.period == 0 {
-        return Err(AppError::Validation("TOTP period must be positive"));
-    }
+    // Re-validate here too: rows stored before validation existed (or by a
+    // buggy path) must fail cleanly instead of overflowing in `hotp`.
+    config.validate()?;
     let secret = base32_decode(&config.secret_base32)
         .filter(|s| !s.is_empty())
         .ok_or(AppError::Validation("invalid TOTP secret"))?;
@@ -148,24 +168,14 @@ fn build_config(
     digits: u32,
     period: u64,
 ) -> Result<TotpConfig, AppError> {
-    let secret_base32 = normalize_secret(secret_raw);
-    let decoded =
-        base32_decode(&secret_base32).ok_or(AppError::Validation("invalid TOTP secret"))?;
-    if decoded.is_empty() {
-        return Err(AppError::Validation("TOTP secret is empty"));
-    }
-    if !(MIN_DIGITS..=MAX_DIGITS).contains(&digits) {
-        return Err(AppError::Validation("TOTP digits must be between 6 and 8"));
-    }
-    if period == 0 {
-        return Err(AppError::Validation("TOTP period must be positive"));
-    }
-    Ok(TotpConfig {
-        secret_base32,
+    let config = TotpConfig {
+        secret_base32: normalize_secret(secret_raw),
         algorithm,
         digits,
         period,
-    })
+    };
+    config.validate()?;
+    Ok(config)
 }
 
 fn hex_val(b: u8) -> Option<u8> {
@@ -312,6 +322,19 @@ mod tests {
         assert_eq!(generate(&c256, 59).unwrap().code, "46119246");
         let c512 = config(SHA512_SECRET, TotpAlgorithm::Sha512, 8);
         assert_eq!(generate(&c512, 59).unwrap().code, "90693936");
+    }
+
+    #[test]
+    fn generate_rejects_out_of_range_digits() {
+        // A deserialized config (import file) bypasses build_config; without
+        // validation 10u32.pow(12) overflows inside hotp.
+        for digits in [0u32, 5, 9, 12] {
+            let c = config(SHA1_SECRET, TotpAlgorithm::Sha1, digits);
+            assert!(
+                matches!(generate(&c, 59), Err(AppError::Validation(_))),
+                "digits {digits} must be rejected"
+            );
+        }
     }
 
     #[test]
