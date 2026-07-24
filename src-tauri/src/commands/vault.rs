@@ -187,6 +187,13 @@ fn unlock_vault_impl(state: &AppState, master_password: String) -> Result<(), Ap
         if wait > 0 {
             return Err(AppError::TooManyUnlockAttempts(wait));
         }
+        // Count the attempt while still holding the lock, treating it as
+        // failed until proven otherwise. Recording only after the (slow,
+        // unlocked) verification would let N concurrent attempts all pass
+        // this gate on the same pre-attempt counter, turning the backoff
+        // into N free guesses per window.
+        s.failed_unlocks = s.failed_unlocks.saturating_add(1);
+        s.last_failed_unlock = Some(Instant::now());
         read_vault_crypto_row(&s.conn)
     })?;
 
@@ -198,8 +205,11 @@ fn unlock_vault_impl(state: &AppState, master_password: String) -> Result<(), Ap
             Ok(())
         }),
         Err(e) => {
+            // The attempt was already counted at the gate; only refresh the
+            // timestamp so the backoff window starts when the attempt
+            // finished, not when it started (the Argon2 run in between would
+            // otherwise silently consume part of the wait).
             with_state(state, |s| {
-                s.failed_unlocks = s.failed_unlocks.saturating_add(1);
                 s.last_failed_unlock = Some(Instant::now());
                 Ok(())
             })?;
