@@ -14,7 +14,7 @@ pub struct Category {
     pub updated_at: String,
 }
 
-fn validate_name(name: &str) -> Result<String, AppError> {
+pub(crate) fn validate_name(name: &str) -> Result<String, AppError> {
     let trimmed = name.trim().to_string();
     if trimmed.is_empty() {
         return Err(AppError::Validation("category name is required"));

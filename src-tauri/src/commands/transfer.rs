@@ -310,6 +310,10 @@ fn import_vault_impl(
             .chain(payload.entries.iter().filter_map(|e| e.category.as_deref()))
             .collect();
         for name in names {
+            // The file may be hand-edited; hold imported names to the same
+            // invariants create_category enforces so the UI can later rename
+            // or otherwise manage them.
+            crate::commands::categories::validate_name(name)?;
             let existing: Option<i64> = tx
                 .query_row("SELECT id FROM categories WHERE name = ?1", [name], |r| {
                     r.get(0)
@@ -330,6 +334,16 @@ fn import_vault_impl(
         }
 
         for entry in &payload.entries {
+            // Same invariants every other write path enforces; a legitimate
+            // export can't violate them, only a hand-edited file can.
+            if entry.title.trim().is_empty() {
+                return Err(AppError::Validation("export file has an entry without a title"));
+            }
+            if entry.password.is_empty() {
+                return Err(AppError::Validation(
+                    "export file has an entry without a password",
+                ));
+            }
             let pw_ct = crypto::encrypt(key, entry.password.as_bytes())?;
             let (notes_bytes, notes_nonce) = match entry.notes.as_deref() {
                 Some(n) if !n.is_empty() => {
@@ -388,6 +402,23 @@ fn import_vault_impl(
                     tags,
                 ],
             )?;
+        }
+
+        // Settings travel with the export for the restore-into-a-fresh-vault
+        // case. A key the user has already configured in this vault is never
+        // overwritten - import merges, it doesn't clobber. Out-of-range
+        // values are neutralized by the clamped read path.
+        for (setting_key, value) in [
+            ("auto_lock_secs", payload.settings.auto_lock_secs),
+            ("clipboard_clear_secs", payload.settings.clipboard_clear_secs),
+        ] {
+            if let Some(v) = value {
+                tx.execute(
+                    "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(key) DO NOTHING",
+                    rusqlite::params![setting_key, v.to_string(), now],
+                )?;
+            }
         }
 
         tx.commit()?;
@@ -1035,28 +1066,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn import_rejects_invalid_totp_config_and_rolls_back() {
-        // Hand-craft an export whose TOTP config has digits=12; storing it
-        // would later overflow 10^digits in code generation.
-        let payload = serde_json::json!({
-            "categories": [],
-            "entries": [{
-                "title": "X", "username": "u", "urlOrAppName": "x",
-                "password": "pw", "notes": null, "category": null,
-                "createdAt": "2026-01-01T00:00:00Z",
-                "updatedAt": "2026-01-01T00:00:00Z",
-                "lastUsedAt": null,
-                "totp": {
-                    "secret_base32": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
-                    "algorithm": "SHA1", "digits": 12, "period": 30
-                }
-            }],
-            "settings": {"autoLockSecs": null}
-        });
+    /// Write an encrypted export file (keyed by PW) from a hand-built payload,
+    /// for exercising invariants a legitimate export can never violate.
+    fn write_crafted_export(payload: &serde_json::Value, file: &TempFile) {
         let salt = crypto::generate_salt();
         let key = crypto::derive_key(PW, &salt).unwrap();
-        let ct = crypto::encrypt(&key, &serde_json::to_vec(&payload).unwrap()).unwrap();
+        let ct = crypto::encrypt(&key, &serde_json::to_vec(payload).unwrap()).unwrap();
         let file_json = serde_json::json!({
             "format": EXPORT_FORMAT,
             "formatVersion": EXPORT_FORMAT_VERSION,
@@ -1065,13 +1080,118 @@ mod tests {
             "nonce": B64.encode(ct.nonce),
             "ciphertext": B64.encode(&ct.bytes),
         });
-        let file = TempFile::new("bad-totp.json");
         std::fs::write(&file.0, serde_json::to_vec(&file_json).unwrap()).unwrap();
+    }
+
+    fn crafted_entry(title: &str, password: &str) -> serde_json::Value {
+        serde_json::json!({
+            "title": title, "username": "u", "urlOrAppName": "x",
+            "password": password, "notes": null, "category": null,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "lastUsedAt": null
+        })
+    }
+
+    #[test]
+    fn import_rejects_invalid_totp_config_and_rolls_back() {
+        // Hand-craft an export whose TOTP config has digits=12; storing it
+        // would later overflow 10^digits in code generation.
+        let mut entry = crafted_entry("X", "pw");
+        entry["totp"] = serde_json::json!({
+            "secret_base32": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+            "algorithm": "SHA1", "digits": 12, "period": 30
+        });
+        let payload = serde_json::json!({
+            "categories": [],
+            "entries": [entry],
+            "settings": {"autoLockSecs": null}
+        });
+        let file = TempFile::new("bad-totp.json");
+        write_crafted_export(&payload, &file);
 
         let state = state_with_vault(PW);
         let err = import_vault_impl(&state, &file.0, PW.into()).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
         assert!(decrypted_entries(&state).is_empty(), "nothing imported");
+    }
+
+    #[test]
+    fn import_rejects_invalid_category_names_and_entries() {
+        let cases = [
+            serde_json::json!({
+                "categories": [""],
+                "entries": [],
+                "settings": {"autoLockSecs": null}
+            }),
+            serde_json::json!({
+                "categories": ["x".repeat(65)],
+                "entries": [],
+                "settings": {"autoLockSecs": null}
+            }),
+            serde_json::json!({
+                "categories": [],
+                "entries": [crafted_entry("   ", "pw")],
+                "settings": {"autoLockSecs": null}
+            }),
+            serde_json::json!({
+                "categories": [],
+                "entries": [crafted_entry("Ok", "")],
+                "settings": {"autoLockSecs": null}
+            }),
+        ];
+        for payload in &cases {
+            let file = TempFile::new("invalid-payload.json");
+            write_crafted_export(payload, &file);
+            let state = state_with_vault(PW);
+            let err = import_vault_impl(&state, &file.0, PW.into()).unwrap_err();
+            assert!(matches!(err, AppError::Validation(_)), "payload: {payload}");
+            assert!(decrypted_entries(&state).is_empty());
+        }
+    }
+
+    #[test]
+    fn import_applies_settings_only_where_unset() {
+        let payload = serde_json::json!({
+            "categories": [],
+            "entries": [crafted_entry("A", "pw")],
+            "settings": {"autoLockSecs": 600, "clipboardClearSecs": 45}
+        });
+        let file = TempFile::new("settings-import.json");
+        write_crafted_export(&payload, &file);
+
+        // Fresh vault: both imported values land.
+        let fresh = state_with_vault(PW);
+        import_vault_impl(&fresh, &file.0, PW.into()).unwrap();
+        let read = |state: &AppState, key: &str| -> Option<String> {
+            state
+                .inner
+                .lock()
+                .unwrap()
+                .conn
+                .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0))
+                .ok()
+        };
+        assert_eq!(read(&fresh, "auto_lock_secs").as_deref(), Some("600"));
+        assert_eq!(read(&fresh, "clipboard_clear_secs").as_deref(), Some("45"));
+
+        // A key the user already configured is never overwritten; only the
+        // missing one is filled in.
+        let configured = state_with_vault(PW);
+        configured
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "INSERT INTO settings (key, value, updated_at)
+                 VALUES ('auto_lock_secs', '900', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        import_vault_impl(&configured, &file.0, PW.into()).unwrap();
+        assert_eq!(read(&configured, "auto_lock_secs").as_deref(), Some("900"));
+        assert_eq!(read(&configured, "clipboard_clear_secs").as_deref(), Some("45"));
     }
 
     #[test]
