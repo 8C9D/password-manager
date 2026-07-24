@@ -39,7 +39,7 @@ pub struct EntryInput {
 }
 
 /// Normalize tags: trim, drop blanks, and de-duplicate while preserving order.
-fn normalize_tags(tags: &[String]) -> Vec<String> {
+pub(crate) fn normalize_tags(tags: &[String]) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     tags.iter()
         .map(|t| t.trim())
@@ -49,11 +49,11 @@ fn normalize_tags(tags: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn tags_to_json(tags: &[String]) -> String {
+pub(crate) fn tags_to_json(tags: &[String]) -> String {
     serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string())
 }
 
-fn tags_from_json(raw: &str) -> Vec<String> {
+pub(crate) fn tags_from_json(raw: &str) -> Vec<String> {
     serde_json::from_str(raw).unwrap_or_default()
 }
 

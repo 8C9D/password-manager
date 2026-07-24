@@ -54,6 +54,12 @@ struct ExportEntry {
     /// field) readable.
     #[serde(default)]
     totp: Option<TotpConfig>,
+    /// `#[serde(default)]` on both keeps older export files (which lacked
+    /// favorites and tags) readable.
+    #[serde(default)]
+    is_favorite: bool,
+    #[serde(default)]
+    tags: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -84,7 +90,7 @@ fn gather_payload(
                 e.encrypted_password, e.password_nonce,
                 e.encrypted_notes, e.notes_nonce,
                 c.name, e.created_at, e.updated_at, e.last_used_at,
-                e.encrypted_totp, e.totp_nonce
+                e.encrypted_totp, e.totp_nonce, e.is_favorite, e.tags
          FROM password_entries e
          LEFT JOIN categories c ON c.id = e.category_id
          ORDER BY e.id",
@@ -103,6 +109,8 @@ fn gather_payload(
         last_used_at: Option<String>,
         enc_totp: Option<Vec<u8>>,
         totp_nonce: Option<Vec<u8>>,
+        is_favorite: bool,
+        tags: String,
     }
     let rows: Vec<Row> = stmt
         .query_map([], |r| {
@@ -120,6 +128,8 @@ fn gather_payload(
                 last_used_at: r.get(10)?,
                 enc_totp: r.get(11)?,
                 totp_nonce: r.get(12)?,
+                is_favorite: r.get(13)?,
+                tags: r.get(14)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -157,6 +167,8 @@ fn gather_payload(
             updated_at: row.updated_at,
             last_used_at: row.last_used_at,
             totp,
+            is_favorite: row.is_favorite,
+            tags: crate::commands::entries::tags_from_json(&row.tags),
         });
     }
 
@@ -333,14 +345,19 @@ fn import_vault_impl(
                 .as_deref()
                 .and_then(|n| category_ids.get(n))
                 .copied();
+            // Tags are re-normalized on the way in: export files can be
+            // hand-edited, and older files carry no tags at all.
+            let tags = crate::commands::entries::tags_to_json(
+                &crate::commands::entries::normalize_tags(&entry.tags),
+            );
             tx.execute(
                 "INSERT INTO password_entries
                     (category_id, title, username, url_or_app_name,
                      encrypted_password, password_nonce,
                      encrypted_notes, notes_nonce,
                      encrypted_totp, totp_nonce,
-                     created_at, updated_at, last_used_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                     created_at, updated_at, last_used_at, is_favorite, tags)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 rusqlite::params![
                     category_id,
                     entry.title,
@@ -355,6 +372,8 @@ fn import_vault_impl(
                     entry.created_at,
                     entry.updated_at,
                     entry.last_used_at,
+                    entry.is_favorite,
+                    tags,
                 ],
             )?;
         }
@@ -453,6 +472,7 @@ const URL_ALIASES: &[&str] = &["url", "urls", "website", "login_uri", "uri"];
 const NOTES_ALIASES: &[&str] = &["notes", "note"];
 const CATEGORY_ALIASES: &[&str] = &["folder", "category", "grouping"];
 const TOTP_ALIASES: &[&str] = &["login_totp", "otpauth", "totp", "one-time password", "otp"];
+const FAVORITE_ALIASES: &[&str] = &["favorite", "favourite", "fav"];
 
 fn find_col(headers: &[String], aliases: &[&str]) -> Option<usize> {
     headers.iter().position(|h| aliases.contains(&h.as_str()))
@@ -460,6 +480,11 @@ fn find_col(headers: &[String], aliases: &[&str]) -> Option<usize> {
 
 fn cell(row: &[String], col: Option<usize>) -> &str {
     col.and_then(|i| row.get(i)).map(String::as_str).unwrap_or("")
+}
+
+/// Bitwarden exports `1` for favorites; other tools use `true`/`yes`.
+fn is_truthy(cell: &str) -> bool {
+    matches!(cell.trim().to_lowercase().as_str(), "1" | "true" | "yes")
 }
 
 fn import_csv_content_impl(state: &AppState, csv: &str) -> Result<CsvImportSummary, AppError> {
@@ -479,6 +504,7 @@ fn import_csv_content_impl(state: &AppState, csv: &str) -> Result<CsvImportSumma
     let c_notes = find_col(&headers, NOTES_ALIASES);
     let c_cat = find_col(&headers, CATEGORY_ALIASES);
     let c_totp = find_col(&headers, TOTP_ALIASES);
+    let c_fav = find_col(&headers, FAVORITE_ALIASES);
 
     let data: Vec<&Vec<String>> = rows.collect();
 
@@ -517,6 +543,7 @@ fn import_csv_content_impl(state: &AppState, csv: &str) -> Result<CsvImportSumma
             let username = cell(row, c_user).trim();
             let notes = cell(row, c_notes);
             let category = cell(row, c_cat).trim();
+            let is_favorite = is_truthy(cell(row, c_fav));
 
             let pw_ct = crypto::encrypt(key, password.as_bytes())?;
             let (notes_bytes, notes_nonce) = if notes.trim().is_empty() {
@@ -573,8 +600,8 @@ fn import_csv_content_impl(state: &AppState, csv: &str) -> Result<CsvImportSumma
                      encrypted_password, password_nonce,
                      encrypted_notes, notes_nonce,
                      encrypted_totp, totp_nonce,
-                     created_at, updated_at, last_used_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, NULL)",
+                     created_at, updated_at, last_used_at, is_favorite)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, NULL, ?12)",
                 rusqlite::params![
                     category_id,
                     title,
@@ -587,6 +614,7 @@ fn import_csv_content_impl(state: &AppState, csv: &str) -> Result<CsvImportSumma
                     totp_bytes,
                     totp_nonce,
                     now,
+                    is_favorite,
                 ],
             )?;
             imported += 1;
@@ -805,6 +833,68 @@ mod tests {
     }
 
     #[test]
+    fn export_import_preserves_favorites_and_tags() {
+        let source = state_with_vault(PW);
+        add_entry(&source, "GitHub", "hunter2", None, None);
+        add_entry(&source, "Bank", "s3cret!", None, None);
+        source
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries
+                 SET is_favorite = 1, tags = '[\"work\",\"email\"]'
+                 WHERE title = 'GitHub'",
+                [],
+            )
+            .unwrap();
+
+        let file = TempFile::new("fav-tags-roundtrip.json");
+        export_vault_impl(&source, PW.into(), &file.0).unwrap();
+
+        let target = state_with_vault(PW);
+        import_vault_impl(&target, &file.0, PW.into()).unwrap();
+
+        let rows: Vec<(String, bool, String)> = {
+            let guard = target.inner.lock().unwrap();
+            let mut stmt = guard
+                .conn
+                .prepare("SELECT title, is_favorite, tags FROM password_entries ORDER BY title")
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            rows
+        };
+        assert_eq!(
+            rows,
+            vec![
+                ("Bank".into(), false, "[]".into()),
+                ("GitHub".into(), true, "[\"work\",\"email\"]".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn export_entry_without_favorite_and_tags_fields_deserializes_with_defaults() {
+        // Export files written before favorites/tags existed lack both fields;
+        // serde defaults must keep them importable.
+        let entry: ExportEntry = serde_json::from_str(
+            r#"{"title":"Old","username":"u","urlOrAppName":"x",
+                "password":"pw","notes":null,"category":null,
+                "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
+                "lastUsedAt":null}"#,
+        )
+        .unwrap();
+        assert!(!entry.is_favorite);
+        assert!(entry.tags.is_empty());
+        assert!(entry.totp.is_none());
+    }
+
+    #[test]
     fn export_import_round_trips_entries_categories_and_fields() {
         let file = TempFile::new("round-trip.json");
         let source = state_with_vault(PW);
@@ -1009,6 +1099,38 @@ mod tests {
         let github = entries.iter().find(|e| e.0 == "GitHub").unwrap();
         assert_eq!(github.1, "hunter2");
         assert_eq!(github.3.as_deref(), Some("Work")); // category
+    }
+
+    #[test]
+    fn import_csv_maps_favorite_column() {
+        let state = state_with_vault(PW);
+        let csv = "folder,favorite,name,login_username,login_password\n\
+                   ,1,Starred,alice,pw-one-1\n\
+                   ,,Plain,bob,pw-two-2\n\
+                   ,0,Zero,carol,pw-three-3\n";
+        assert_eq!(import_csv_content_impl(&state, csv).unwrap().imported, 3);
+
+        let favs: Vec<(String, bool)> = {
+            let guard = state.inner.lock().unwrap();
+            let mut stmt = guard
+                .conn
+                .prepare("SELECT title, is_favorite FROM password_entries ORDER BY title")
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            rows
+        };
+        assert_eq!(
+            favs,
+            vec![
+                ("Plain".into(), false),
+                ("Starred".into(), true),
+                ("Zero".into(), false),
+            ]
+        );
     }
 
     #[test]
