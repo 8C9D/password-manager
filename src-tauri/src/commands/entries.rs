@@ -1,6 +1,7 @@
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use zeroize::Zeroizing;
 
 use crate::crypto;
 use crate::crypto::totp::{self, GeneratedTotp, TotpConfig};
@@ -150,8 +151,8 @@ fn create_entry_impl(state: &AppState, input: EntryInput) -> Result<i64, AppErro
                  encrypted_notes, notes_nonce,
                  encrypted_totp, totp_nonce,
                  is_favorite, tags,
-                 created_at, updated_at, last_used_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, NULL)",
+                 created_at, updated_at, last_used_at, password_changed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, NULL, ?13)",
             rusqlite::params![
                 input.category_id,
                 input.title.trim(),
@@ -318,6 +319,19 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
         // in either (e.g. an unparseable TOTP secret) rolls back the whole edit
         // instead of leaving the entry half-updated.
         let tx = s.conn.transaction()?;
+        // password_changed_at must only move when the password VALUE changes;
+        // the row is re-encrypted on every edit, so the ciphertext can't tell
+        // a rotation from a title rename - compare plaintexts instead.
+        let existing: Option<(Vec<u8>, Vec<u8>)> = tx
+            .query_row(
+                "SELECT encrypted_password, password_nonce FROM password_entries WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let (old_enc, old_nonce) = existing.ok_or(AppError::EntryNotFound)?;
+        let old_pw = Zeroizing::new(crypto::decrypt(key, &old_enc, &old_nonce)?);
+        let password_changed = old_pw.as_slice() != input.password.as_bytes();
         let n = tx.execute(
             "UPDATE password_entries SET
                 category_id = ?1,
@@ -330,8 +344,9 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
                 notes_nonce = ?8,
                 is_favorite = ?9,
                 tags = ?10,
-                updated_at = ?11
-             WHERE id = ?12",
+                updated_at = ?11,
+                password_changed_at = CASE WHEN ?12 THEN ?11 ELSE password_changed_at END
+             WHERE id = ?13",
             rusqlite::params![
                 input.category_id,
                 input.title.trim(),
@@ -344,6 +359,7 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
                 input.favorite,
                 tags,
                 now,
+                password_changed,
                 id,
             ],
         )?;
@@ -466,7 +482,6 @@ pub fn set_favorite(
 mod tests {
     use super::*;
     use crate::db;
-    use zeroize::Zeroizing;
 
     fn fixed_key() -> [u8; 32] {
         let mut k = [0u8; 32];
@@ -525,6 +540,39 @@ mod tests {
         let n = nonce.expect("nonce present");
         let recovered = crypto::decrypt(&key, &ct, &n).unwrap();
         assert_eq!(recovered, b"secret note");
+    }
+
+    #[test]
+    fn update_bumps_password_changed_at_only_for_a_new_password() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        let read = |state: &AppState| -> String {
+            state
+                .inner
+                .lock()
+                .unwrap()
+                .conn
+                .query_row(
+                    "SELECT password_changed_at FROM password_entries WHERE id = ?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let original = read(&state);
+
+        // Metadata-only edit (same password, new title): the password's own
+        // timestamp must not move, or the stale audit resets on every rename.
+        let mut input = sample_input();
+        input.title = "GitHub (work)".into();
+        update_entry_impl(&state, id, input).unwrap();
+        assert_eq!(read(&state), original);
+
+        // An actual rotation moves it.
+        let mut input = sample_input();
+        input.password = "brand-new-password-9".into();
+        update_entry_impl(&state, id, input).unwrap();
+        assert_ne!(read(&state), original);
     }
 
     #[test]

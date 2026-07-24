@@ -71,10 +71,12 @@ pub(crate) fn is_weak(pw: &str) -> bool {
     len < HARD_MIN_LENGTH || (len < WEAK_MIN_LENGTH && char_classes(pw) < WEAK_MIN_CLASSES)
 }
 
-/// Whether an RFC3339 `updated_at` is older than the staleness threshold as of
-/// `now`. Unparseable timestamps are treated as not-stale (never a false alarm).
-pub(crate) fn is_stale(updated_at: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
-    match chrono::DateTime::parse_from_rfc3339(updated_at) {
+/// Whether an RFC3339 timestamp (the password's own change time, not the
+/// row's `updated_at` - metadata edits must not reset staleness) is older than
+/// the threshold as of `now`. Unparseable timestamps are treated as not-stale
+/// (never a false alarm).
+pub(crate) fn is_stale(changed_at: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    match chrono::DateTime::parse_from_rfc3339(changed_at) {
         Ok(dt) => (now - dt.with_timezone(&chrono::Utc)).num_days() > STALE_AFTER_DAYS,
         Err(_) => false,
     }
@@ -91,8 +93,11 @@ struct ScannedEntry {
 fn audit_vault_impl(state: &AppState) -> Result<VaultHealth, AppError> {
     let now = chrono::Utc::now();
     with_unlocked(state, |s, key| {
+        // COALESCE covers rows that predate the password_changed_at column
+        // in case the migration backfill was ever skipped.
         let mut stmt = s.conn.prepare(
-            "SELECT id, title, encrypted_password, password_nonce, updated_at
+            "SELECT id, title, encrypted_password, password_nonce,
+                    COALESCE(password_changed_at, updated_at)
              FROM password_entries
              ORDER BY title COLLATE NOCASE ASC",
         )?;
@@ -106,12 +111,12 @@ fn audit_vault_impl(state: &AppState) -> Result<VaultHealth, AppError> {
         let total = raw.len();
         let mut hash_counts: HashMap<[u8; 32], usize> = HashMap::new();
         let mut scanned = Vec::with_capacity(total);
-        for (id, title, enc, nonce, updated_at) in raw {
+        for (id, title, enc, nonce, changed_at) in raw {
             let pw = Zeroizing::new(crypto::decrypt(key, &enc, &nonce)?);
             let password_hash: [u8; 32] = Sha256::digest(pw.as_slice()).into();
             let pw_str = String::from_utf8_lossy(&pw);
             let weak = is_weak(&pw_str);
-            let stale = is_stale(&updated_at, now);
+            let stale = is_stale(&changed_at, now);
             *hash_counts.entry(password_hash).or_insert(0) += 1;
             scanned.push(ScannedEntry {
                 id,
@@ -250,6 +255,44 @@ mod tests {
         let health = audit_vault_impl(&state).unwrap();
         let old = health.issues.iter().find(|i| i.title == "Old").unwrap();
         assert!(old.stale);
+        assert_eq!(health.stale_count, 1);
+    }
+
+    #[test]
+    fn staleness_follows_the_password_change_time_not_the_row_edit_time() {
+        let state = unlocked_state();
+        // Row edited today, but the password itself unchanged since 2020: a
+        // rename must not hide a 5-year-old password from the audit.
+        insert_entry(&state, "Renamed", "Zx9!qWer_p2@Lm", &crate::db::now_iso8601());
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries SET password_changed_at = '2020-01-01T00:00:00Z'
+                 WHERE title = 'Renamed'",
+                [],
+            )
+            .unwrap();
+        // The inverse: an old row whose password was rotated recently.
+        insert_entry(&state, "Rotated", "Qw3$eRty_u8#Op", "2020-01-01T00:00:00Z");
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries SET password_changed_at = ?1
+                 WHERE title = 'Rotated'",
+                [crate::db::now_iso8601()],
+            )
+            .unwrap();
+
+        let health = audit_vault_impl(&state).unwrap();
+        let renamed = health.issues.iter().find(|i| i.title == "Renamed").unwrap();
+        assert!(renamed.stale);
+        assert!(!health.issues.iter().any(|i| i.title == "Rotated"));
         assert_eq!(health.stale_count, 1);
     }
 

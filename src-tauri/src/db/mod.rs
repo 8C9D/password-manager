@@ -26,6 +26,15 @@ const MIGRATIONS: &[Migration] = &[
         sql: "ALTER TABLE password_entries ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0;
               ALTER TABLE password_entries ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';",
     },
+    Migration {
+        version: 3,
+        // Stale-password auditing needs the password's own age; updated_at is
+        // bumped by every metadata edit (rename, tags, notes) and so hides an
+        // old password behind any edit. Backfill with updated_at - the best
+        // approximation available for existing rows.
+        sql: "ALTER TABLE password_entries ADD COLUMN password_changed_at TEXT;
+              UPDATE password_entries SET password_changed_at = updated_at;",
+    },
 ];
 
 #[cfg(test)]
@@ -244,6 +253,15 @@ mod tests {
             .query_row("SELECT name FROM categories WHERE id = 1", [], |r| r.get(0))
             .unwrap();
         assert_eq!(cat, "Work");
+        // Migration 3 backfills the password-change time from updated_at.
+        let changed: Option<String> = conn
+            .query_row(
+                "SELECT password_changed_at FROM password_entries WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(changed.as_deref(), Some("2026-01-01T00:00:00Z"));
     }
 
     #[test]
