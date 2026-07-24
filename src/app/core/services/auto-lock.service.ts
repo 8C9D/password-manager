@@ -10,6 +10,19 @@ const ACTIVITY_EVENTS = ['mousemove', 'keydown', 'mousedown', 'wheel', 'touchsta
 // unlocked forever with no further attempts.
 const LOCK_RETRY_SECS = 5;
 
+/**
+ * Whether a `visibilitychange` should count as user activity and restart the
+ * idle countdown.
+ *
+ * The event fires on both transitions. Only coming back to the app is activity:
+ * treating the switch *away* as activity handed the vault a fresh full idle
+ * window at the exact moment the user stopped watching it, so tabbing away
+ * repeatedly could keep an unattended vault unlocked indefinitely.
+ */
+export function countsAsActivity(state: DocumentVisibilityState): boolean {
+  return state === 'visible';
+}
+
 @Injectable({ providedIn: 'root' })
 export class AutoLockService {
   private readonly vault = inject(VaultService);
@@ -23,11 +36,17 @@ export class AutoLockService {
     if (this.vault.isUnlocked()) this.reset();
   };
 
+  private readonly onVisibilityChange = () => {
+    if (countsAsActivity(document.visibilityState)) this.onActivity();
+  };
+
   constructor() {
     for (const ev of ACTIVITY_EVENTS) {
       window.addEventListener(ev, this.onActivity, { passive: true });
     }
-    window.addEventListener('visibilitychange', this.onActivity, { passive: true });
+    document.addEventListener('visibilitychange', this.onVisibilityChange, {
+      passive: true,
+    });
 
     effect(() => {
       const unlocked = this.vault.isUnlocked();
