@@ -6,6 +6,7 @@ import {
   EntryIssue,
   EntrySummary,
   GeneratedTotp,
+  PasswordHistoryItem,
   TotpUpdate,
   VaultHealth,
 } from '../models/entry.model';
@@ -44,6 +45,14 @@ export class PasswordEntryService {
 
   async generateTotp(id: number): Promise<GeneratedTotp> {
     return call<GeneratedTotp>('generate_totp', { id });
+  }
+
+  async passwordHistory(id: number): Promise<PasswordHistoryItem[]> {
+    return call<PasswordHistoryItem[]>('list_password_history', { id });
+  }
+
+  async clearPasswordHistory(id: number): Promise<number> {
+    return call<number>('clear_password_history', { id });
   }
 
   async auditVault(): Promise<VaultHealth> {

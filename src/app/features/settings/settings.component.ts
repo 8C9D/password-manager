@@ -68,6 +68,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
   protected readonly presets = PRESETS;
   protected autoLockSecs = 300;
   protected clipboardClearSecs = 15;
+  protected passwordHistoryLimit = 10;
   protected readonly loading = signal(true);
   protected readonly busy = signal(false);
   protected readonly errorMsg = signal<string | null>(null);
@@ -87,6 +88,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
       const s = await this.settings.load();
       this.autoLockSecs = s.autoLockSecs;
       this.clipboardClearSecs = s.clipboardClearSecs;
+      this.passwordHistoryLimit = s.passwordHistoryLimit;
     } catch (e) {
       this.errorMsg.set(formatBackendError(e));
     } finally {
@@ -111,10 +113,17 @@ export class SettingsComponent implements OnInit, OnDestroy {
       this.busy.set(false);
       return;
     }
+    const historyLimit = Math.floor(Number(this.passwordHistoryLimit));
+    if (!Number.isFinite(historyLimit) || historyLimit < 0 || historyLimit > 50) {
+      this.errorMsg.set('Password history must be between 0 and 50 entries.');
+      this.busy.set(false);
+      return;
+    }
     try {
       await this.settings.update({
         autoLockSecs: secs,
         clipboardClearSecs: clearSecs,
+        passwordHistoryLimit: historyLimit,
       });
       this.flash(this.savedMsg, 'Settings saved.', 3000);
     } catch (e) {

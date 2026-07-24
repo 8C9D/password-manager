@@ -366,6 +366,12 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
         if n == 0 {
             return Err(AppError::EntryNotFound);
         }
+        // Retain the password we just replaced, inside the same transaction, so
+        // a failure here rolls the rotation back rather than losing the old
+        // password with no record of it.
+        if password_changed {
+            super::history::record_password_change(&tx, key, id, old_pw.as_slice(), &now)?;
+        }
         match &input.totp {
             TotpUpdate::Keep => {}
             TotpUpdate::Clear => {
@@ -476,6 +482,26 @@ pub fn set_favorite(
     favorite: bool,
 ) -> Result<(), AppError> {
     set_favorite_impl(&state, id, favorite)
+}
+
+/// Create an entry from another module's tests. The `_impl` functions are
+/// private to this module, but the history and transfer tests need to drive
+/// real entry writes rather than hand-rolled INSERTs that skip this path.
+#[cfg(test)]
+pub(crate) fn create_entry_for_test(
+    state: &AppState,
+    input: EntryInput,
+) -> Result<i64, AppError> {
+    create_entry_impl(state, input)
+}
+
+#[cfg(test)]
+pub(crate) fn update_entry_for_test(
+    state: &AppState,
+    id: i64,
+    input: EntryInput,
+) -> Result<(), AppError> {
+    update_entry_impl(state, id, input)
 }
 
 #[cfg(test)]

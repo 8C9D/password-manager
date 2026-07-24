@@ -5,12 +5,14 @@ import { call } from './tauri-invoke';
 
 const DEFAULT_AUTO_LOCK_SECS = 300;
 const DEFAULT_CLIPBOARD_CLEAR_SECS = 15;
+const DEFAULT_PASSWORD_HISTORY_LIMIT = 10;
 
 @Injectable({ providedIn: 'root' })
 export class SettingsService {
   readonly settings = signal<AppSettings>({
     autoLockSecs: DEFAULT_AUTO_LOCK_SECS,
     clipboardClearSecs: DEFAULT_CLIPBOARD_CLEAR_SECS,
+    passwordHistoryLimit: DEFAULT_PASSWORD_HISTORY_LIMIT,
   });
 
   async load(): Promise<AppSettings> {

@@ -108,3 +108,46 @@ dd {
   border: 1px solid var(--border);
   color: var(--muted);
 }
+.history {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.history-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.history-head h3 {
+  flex: 1;
+  margin: 0;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+}
+.small {
+  font-size: 0.85rem;
+}
+.history-list {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.history-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.history-date {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+}

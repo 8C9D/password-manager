@@ -64,6 +64,17 @@ struct ExportEntry {
     /// export files lack it; import falls back to `updated_at`.
     #[serde(default)]
     password_changed_at: Option<String>,
+    /// Superseded passwords, oldest first. `#[serde(default)]` keeps older
+    /// export files (which had no history) readable.
+    #[serde(default)]
+    password_history: Vec<ExportHistoryItem>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportHistoryItem {
+    password: String,
+    changed_at: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -74,6 +85,8 @@ struct ExportSettings {
     /// readable.
     #[serde(default)]
     clipboard_clear_secs: Option<u64>,
+    #[serde(default)]
+    password_history_limit: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,12 +112,13 @@ fn gather_payload(
                 e.encrypted_notes, e.notes_nonce,
                 c.name, e.created_at, e.updated_at, e.last_used_at,
                 e.encrypted_totp, e.totp_nonce, e.is_favorite, e.tags,
-                e.password_changed_at
+                e.password_changed_at, e.id
          FROM password_entries e
          LEFT JOIN categories c ON c.id = e.category_id
          ORDER BY e.id",
     )?;
     struct Row {
+        id: i64,
         title: String,
         username: String,
         url_or_app_name: String,
@@ -141,10 +155,16 @@ fn gather_payload(
                 is_favorite: r.get(13)?,
                 tags: r.get(14)?,
                 password_changed_at: r.get(15)?,
+                id: r.get(16)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
     drop(stmt);
+
+    let mut history_stmt = s.conn.prepare(
+        "SELECT encrypted_password, password_nonce, changed_at
+         FROM password_history WHERE entry_id = ?1 ORDER BY id ASC",
+    )?;
 
     let mut entries = Vec::with_capacity(rows.len());
     for row in rows {
@@ -167,6 +187,21 @@ fn gather_payload(
             }
             _ => None,
         };
+        type HistoryRow = (Vec<u8>, Vec<u8>, String);
+        let history_rows: Vec<HistoryRow> = history_stmt
+            .query_map([row.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut password_history = Vec::with_capacity(history_rows.len());
+        for (ciphertext, nonce, changed_at) in history_rows {
+            let plain = crypto::decrypt(key, &ciphertext, &nonce)?;
+            password_history.push(ExportHistoryItem {
+                password: String::from_utf8(plain).map_err(|_| {
+                    AppError::Crypto("stored password is not valid utf-8")
+                })?,
+                changed_at,
+            });
+        }
+
         entries.push(ExportEntry {
             title: row.title,
             username: row.username,
@@ -181,8 +216,10 @@ fn gather_payload(
             is_favorite: row.is_favorite,
             tags: crate::commands::entries::tags_from_json(&row.tags),
             password_changed_at: row.password_changed_at,
+            password_history,
         });
     }
+    drop(history_stmt);
 
     let read_setting = |key: &str| -> Option<u64> {
         s.conn
@@ -194,6 +231,7 @@ fn gather_payload(
     };
     let auto_lock_secs = read_setting("auto_lock_secs");
     let clipboard_clear_secs = read_setting("clipboard_clear_secs");
+    let password_history_limit = read_setting("password_history_limit");
 
     Ok(ExportPayload {
         categories,
@@ -201,6 +239,7 @@ fn gather_payload(
         settings: ExportSettings {
             auto_lock_secs,
             clipboard_clear_secs,
+            password_history_limit,
         },
     })
 }
@@ -341,6 +380,31 @@ fn import_vault_impl(
             category_ids.insert(name.to_string(), id);
         }
 
+        // Settings travel with the export for the restore-into-a-fresh-vault
+        // case. A key the user has already configured in this vault is never
+        // overwritten - import merges, it doesn't clobber. Out-of-range
+        // values are neutralized by the clamped read path.
+        //
+        // Applied before the entries so an imported retention limit governs the
+        // history imported alongside it.
+        for (setting_key, value) in [
+            ("auto_lock_secs", payload.settings.auto_lock_secs),
+            ("clipboard_clear_secs", payload.settings.clipboard_clear_secs),
+            (
+                "password_history_limit",
+                payload.settings.password_history_limit,
+            ),
+        ] {
+            if let Some(v) = value {
+                tx.execute(
+                    "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(key) DO NOTHING",
+                    rusqlite::params![setting_key, v.to_string(), now],
+                )?;
+            }
+        }
+        let history_limit = crate::commands::settings::password_history_limit(&tx);
+
         for entry in &payload.entries {
             // Same invariants every other write path enforces; a legitimate
             // export can't violate them, only a hand-edited file can.
@@ -415,23 +479,33 @@ fn import_vault_impl(
                         .unwrap_or(&entry.updated_at),
                 ],
             )?;
-        }
 
-        // Settings travel with the export for the restore-into-a-fresh-vault
-        // case. A key the user has already configured in this vault is never
-        // overwritten - import merges, it doesn't clobber. Out-of-range
-        // values are neutralized by the clamped read path.
-        for (setting_key, value) in [
-            ("auto_lock_secs", payload.settings.auto_lock_secs),
-            ("clipboard_clear_secs", payload.settings.clipboard_clear_secs),
-        ] {
-            if let Some(v) = value {
+            // Superseded passwords ride along with the entry, oldest first so
+            // the new rowids keep the file's ordering. They are re-encrypted
+            // under this vault's key like every other secret in the payload.
+            let entry_id = tx.last_insert_rowid();
+            for item in &entry.password_history {
+                if item.password.is_empty() {
+                    return Err(AppError::Validation(
+                        "export file has a history entry without a password",
+                    ));
+                }
+                let ct = crypto::encrypt(key, item.password.as_bytes())?;
                 tx.execute(
-                    "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
-                     ON CONFLICT(key) DO NOTHING",
-                    rusqlite::params![setting_key, v.to_string(), now],
+                    "INSERT INTO password_history
+                        (entry_id, encrypted_password, password_nonce, changed_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![
+                        entry_id,
+                        ct.bytes,
+                        ct.nonce.as_slice(),
+                        item.changed_at
+                    ],
                 )?;
             }
+            // The file can carry more history than this vault retains (it was
+            // written by a vault with a higher limit, or hand-edited).
+            crate::commands::history::prune_history(&tx, entry_id, history_limit)?;
         }
 
         tx.commit()?;
@@ -979,6 +1053,172 @@ mod tests {
                 ("GitHub".into(), "2025-06-01T00:00:00Z".into()),
             ]
         );
+    }
+
+    /// Attach superseded passwords to the newest entry, encrypted under the
+    /// vault's current key, oldest first.
+    fn add_history(state: &AppState, entry_title: &str, passwords: &[&str]) {
+        let key = **state.inner.lock().unwrap().key.as_ref().unwrap();
+        let guard = state.inner.lock().unwrap();
+        let entry_id: i64 = guard
+            .conn
+            .query_row(
+                "SELECT id FROM password_entries WHERE title = ?1",
+                [entry_title],
+                |r| r.get(0),
+            )
+            .unwrap();
+        for (i, pw) in passwords.iter().enumerate() {
+            let ct = crypto::encrypt(&key, pw.as_bytes()).unwrap();
+            guard
+                .conn
+                .execute(
+                    "INSERT INTO password_history
+                        (entry_id, encrypted_password, password_nonce, changed_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![
+                        entry_id,
+                        ct.bytes,
+                        ct.nonce.as_slice(),
+                        format!("2026-01-0{}T00:00:00Z", i + 1)
+                    ],
+                )
+                .unwrap();
+        }
+    }
+
+    /// Decrypt an entry's retained passwords, oldest first.
+    fn history_passwords(state: &AppState, entry_title: &str) -> Vec<String> {
+        let key = **state.inner.lock().unwrap().key.as_ref().unwrap();
+        let guard = state.inner.lock().unwrap();
+        let mut stmt = guard
+            .conn
+            .prepare(
+                "SELECT h.encrypted_password, h.password_nonce
+                 FROM password_history h
+                 JOIN password_entries e ON e.id = h.entry_id
+                 WHERE e.title = ?1
+                 ORDER BY h.id",
+            )
+            .unwrap();
+        let rows: Vec<(Vec<u8>, Vec<u8>)> = stmt
+            .query_map([entry_title], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        rows.into_iter()
+            .map(|(c, n)| String::from_utf8(crypto::decrypt(&key, &c, &n).unwrap()).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn export_import_preserves_password_history() {
+        let source = state_with_vault(PW);
+        add_entry(&source, "GitHub", "current", None, None);
+        add_history(&source, "GitHub", &["oldest", "middle", "newest"]);
+        // An entry with no history must survive the round trip untouched.
+        add_entry(&source, "Bank", "s3cret!", None, None);
+
+        let file = TempFile::new("history-roundtrip.json");
+        export_vault_impl(&source, PW.into(), &file.0).unwrap();
+        let target = state_with_vault(PW);
+        import_vault_impl(&target, &file.0, PW.into()).unwrap();
+
+        // Order matters: the UI shows the most recently superseded first, so a
+        // round trip that scrambles the order silently rewrites the timeline.
+        assert_eq!(
+            history_passwords(&target, "GitHub"),
+            vec!["oldest", "middle", "newest"]
+        );
+        assert!(history_passwords(&target, "Bank").is_empty());
+
+        // The changed_at stamps travel too, not just the secrets.
+        let stamps: Vec<String> = {
+            let guard = target.inner.lock().unwrap();
+            let mut stmt = guard
+                .conn
+                .prepare("SELECT changed_at FROM password_history ORDER BY id")
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            rows
+        };
+        assert_eq!(
+            stamps,
+            vec![
+                "2026-01-01T00:00:00Z",
+                "2026-01-02T00:00:00Z",
+                "2026-01-03T00:00:00Z"
+            ]
+        );
+    }
+
+    #[test]
+    fn import_trims_history_to_the_target_vaults_retention_limit() {
+        let source = state_with_vault(PW);
+        add_entry(&source, "GitHub", "current", None, None);
+        add_history(&source, "GitHub", &["p1", "p2", "p3", "p4"]);
+
+        let file = TempFile::new("history-limit.json");
+        export_vault_impl(&source, PW.into(), &file.0).unwrap();
+
+        // The target keeps only 2; importing must not smuggle in more retained
+        // secrets than this vault is configured to hold.
+        let target = state_with_vault(PW);
+        target
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "INSERT INTO settings (key, value, updated_at)
+                 VALUES ('password_history_limit', '2', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        import_vault_impl(&target, &file.0, PW.into()).unwrap();
+
+        assert_eq!(history_passwords(&target, "GitHub"), vec!["p3", "p4"]);
+    }
+
+    #[test]
+    fn import_rejects_a_history_entry_with_an_empty_password() {
+        let source = state_with_vault(PW);
+        add_entry(&source, "GitHub", "current", None, None);
+        add_history(&source, "GitHub", &[""]);
+
+        let file = TempFile::new("history-empty.json");
+        export_vault_impl(&source, PW.into(), &file.0).unwrap();
+        let target = state_with_vault(PW);
+        assert!(matches!(
+            import_vault_impl(&target, &file.0, PW.into()),
+            Err(AppError::Validation(_))
+        ));
+        // The whole import rolls back, entry included.
+        let count: i64 = target
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row("SELECT COUNT(*) FROM password_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn export_entry_without_password_history_deserializes_with_defaults() {
+        // Export files written before history existed lack the field entirely.
+        let entry: ExportEntry = serde_json::from_str(
+            r#"{"title":"Old","username":"u","urlOrAppName":"x",
+                "password":"pw","notes":null,"category":null,
+                "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
+                "lastUsedAt":null}"#,
+        )
+        .unwrap();
+        assert!(entry.password_history.is_empty());
     }
 
     #[test]

@@ -35,6 +35,21 @@ const MIGRATIONS: &[Migration] = &[
         sql: "ALTER TABLE password_entries ADD COLUMN password_changed_at TEXT;
               UPDATE password_entries SET password_changed_at = updated_at;",
     },
+    Migration {
+        version: 4,
+        // Previous passwords, encrypted with the vault key exactly like
+        // password_entries.encrypted_password. ON DELETE CASCADE relies on the
+        // per-connection foreign_keys pragma set in enable_foreign_keys.
+        sql: "CREATE TABLE password_history (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  entry_id INTEGER NOT NULL
+                      REFERENCES password_entries(id) ON DELETE CASCADE,
+                  encrypted_password BLOB NOT NULL,
+                  password_nonce BLOB NOT NULL,
+                  changed_at TEXT NOT NULL
+              );
+              CREATE INDEX idx_history_entry ON password_history(entry_id, id DESC);",
+    },
 ];
 
 #[cfg(test)]
@@ -140,7 +155,13 @@ mod tests {
         migrate(&mut conn, MIGRATIONS).unwrap();
         assert_eq!(user_version(&conn).unwrap(), LATEST_VERSION);
         let tables = table_names(&conn);
-        for t in ["vault_metadata", "categories", "password_entries", "settings"] {
+        for t in [
+            "vault_metadata",
+            "categories",
+            "password_entries",
+            "settings",
+            "password_history",
+        ] {
             assert!(tables.iter().any(|n| n == t), "missing table {t}");
         }
     }

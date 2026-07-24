@@ -393,6 +393,28 @@ fn change_master_password_impl(
             )?;
         }
 
+        // Retained previous passwords are encrypted with the same vault key and
+        // must rotate with everything else - skipping them would leave rows
+        // that no key in existence can decrypt.
+        let mut stmt =
+            tx.prepare("SELECT id, encrypted_password, password_nonce FROM password_history")?;
+        let history: Vec<(i64, Vec<u8>, Vec<u8>)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        for (id, enc_pw, pw_nonce) in history {
+            let plain = Zeroizing::new(crypto::decrypt(&old_key, &enc_pw, &pw_nonce)?);
+            let ct = crypto::encrypt(&new_key, &plain)?;
+            tx.execute(
+                "UPDATE password_history SET
+                    encrypted_password = ?1,
+                    password_nonce = ?2
+                 WHERE id = ?3",
+                rusqlite::params![ct.bytes, ct.nonce.as_slice(), id],
+            )?;
+        }
+
         tx.commit()?;
 
         // Only after the commit is the new key authoritative; the old key
@@ -797,6 +819,68 @@ mod tests {
         let json2 = crypto::decrypt(&reunlocked_key, &enc, &nonce).unwrap();
         let config2: TotpConfig = serde_json::from_slice(&json2).unwrap();
         assert_eq!(config2.secret_base32, RFC_SECRET);
+    }
+
+    #[test]
+    fn change_reencrypts_password_history_so_it_survives_a_rekey() {
+        let state = state_with_vault();
+        let id = insert_entry(&state, "GitHub", "current-password", None);
+
+        // Two superseded passwords, encrypted under the current (old) vault key.
+        let old_key = current_key(&state);
+        for (i, old) in ["first-password", "second-password"].iter().enumerate() {
+            let ct = crypto::encrypt(&old_key, old.as_bytes()).unwrap();
+            let guard = state.inner.lock().unwrap();
+            guard
+                .conn
+                .execute(
+                    "INSERT INTO password_history
+                        (entry_id, encrypted_password, password_nonce, changed_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![
+                        id,
+                        ct.bytes,
+                        ct.nonce.as_slice(),
+                        format!("2026-0{}-01T00:00:00Z", i + 1)
+                    ],
+                )
+                .unwrap();
+        }
+
+        change_master_password_impl(&state, PW_OLD.into(), PW_NEW.into()).unwrap();
+
+        // Same trap the TOTP columns fell into: a new encrypt-at-rest table that
+        // the rekey loop doesn't know about is left under a key whose salt is
+        // gone, making every retained password permanently unreadable.
+        let read_history = |key: &[u8; 32]| -> Vec<String> {
+            let guard = state.inner.lock().unwrap();
+            let mut stmt = guard
+                .conn
+                .prepare(
+                    "SELECT encrypted_password, password_nonce
+                     FROM password_history WHERE entry_id = ?1 ORDER BY id",
+                )
+                .unwrap();
+            let rows: Vec<(Vec<u8>, Vec<u8>)> = stmt
+                .query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            rows.into_iter()
+                .map(|(c, n)| String::from_utf8(crypto::decrypt(key, &c, &n).unwrap()).unwrap())
+                .collect()
+        };
+
+        let new_key = current_key(&state);
+        assert_eq!(read_history(&new_key), vec!["first-password", "second-password"]);
+
+        // And still readable after a fresh lock/unlock with the new password.
+        lock_vault_impl(&state).unwrap();
+        unlock_vault_impl(&state, PW_NEW.into()).unwrap();
+        assert_eq!(
+            read_history(&current_key(&state)),
+            vec!["first-password", "second-password"]
+        );
     }
 
     #[test]

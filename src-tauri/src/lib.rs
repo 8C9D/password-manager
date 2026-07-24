@@ -42,6 +42,8 @@ pub fn run() {
             commands::entries::generate_totp,
             commands::entries::set_favorite,
             commands::health::audit_vault,
+            commands::history::list_password_history,
+            commands::history::clear_password_history,
             commands::categories::list_categories,
             commands::categories::create_category,
             commands::categories::update_category,

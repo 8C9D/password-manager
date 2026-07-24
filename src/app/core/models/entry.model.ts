@@ -45,6 +45,13 @@ export interface EntryInput {
   tags?: string[];
 }
 
+export interface PasswordHistoryItem {
+  id: number;
+  password: string;
+  /** When this password stopped being the entry's current one. */
+  changedAt: string;
+}
+
 export interface GeneratedTotp {
   code: string;
   period: number;

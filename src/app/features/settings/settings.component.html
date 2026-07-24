@@ -50,6 +50,23 @@
         />
       </label>
 
+      <h3>Password history</h3>
+      <p class="muted small">
+        Previous passwords kept per entry when you change one, so a mistaken change can be
+        recovered (0–50). Set to 0 to keep none. Lowering this discards anything already
+        stored above the new limit.
+      </p>
+      <label class="custom">
+        Passwords to keep
+        <input
+          type="number"
+          [(ngModel)]="passwordHistoryLimit"
+          min="0"
+          max="50"
+          name="passwordHistoryLimit"
+        />
+      </label>
+
       @if (errorMsg()) {
         <p class="warn">{{ errorMsg() }}</p>
       }

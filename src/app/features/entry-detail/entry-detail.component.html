@@ -102,5 +102,48 @@
       <dt>Last viewed</dt>
       <dd><span class="value muted">{{ e.lastUsedAt ? formatDate(e.lastUsedAt) : 'just now' }}</span></dd>
     </dl>
+
+    <section class="history">
+      <div class="history-head">
+        <h3>Password history</h3>
+        @if (history() === null) {
+          <button class="btn small" type="button" [disabled]="historyBusy()" (click)="loadHistory()">
+            {{ historyBusy() ? 'Loading…' : 'Show' }}
+          </button>
+        } @else {
+          <button class="btn small" type="button" (click)="hideHistory()">Hide</button>
+          @if (history()!.length > 0) {
+            <button class="btn small danger" type="button" (click)="onClearHistory()">Clear</button>
+          }
+        }
+      </div>
+
+      @if (historyError()) {
+        <p class="warn">{{ historyError() }}</p>
+      }
+
+      @if (history(); as rows) {
+        @if (rows.length === 0) {
+          <p class="muted small">No previous passwords are kept for this entry.</p>
+        } @else {
+          <ul class="history-list">
+            @for (h of rows; track h.id) {
+              <li class="history-row">
+                <span class="value mono">
+                  {{ revealedHistoryId() === h.id ? h.password : mask(h.password) }}
+                </span>
+                <span class="history-date muted">Replaced {{ formatDate(h.changedAt) }}</span>
+                <button class="btn small" type="button" (click)="toggleHistoryReveal(h.id)">
+                  {{ revealedHistoryId() === h.id ? 'Hide' : 'Show' }}
+                </button>
+                <button class="btn small" type="button" (click)="copy(h.password, 'password')">
+                  Copy
+                </button>
+              </li>
+            }
+          </ul>
+        }
+      }
+    </section>
   }
 </div>

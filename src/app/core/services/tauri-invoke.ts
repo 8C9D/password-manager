@@ -28,6 +28,8 @@ export type TauriCommand =
   | 'generate_totp'
   | 'set_favorite'
   | 'audit_vault'
+  | 'list_password_history'
+  | 'clear_password_history'
   | 'list_categories'
   | 'create_category'
   | 'update_category'

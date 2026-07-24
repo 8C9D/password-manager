@@ -13,11 +13,18 @@ pub(crate) const DEFAULT_CLIPBOARD_CLEAR_SECS: u64 = 15;
 pub(crate) const MIN_CLIPBOARD_CLEAR_SECS: u64 = 1;
 pub(crate) const MAX_CLIPBOARD_CLEAR_SECS: u64 = 600;
 
+pub(crate) const DEFAULT_PASSWORD_HISTORY_LIMIT: u64 = 10;
+/// Zero is a supported value: it turns password history off entirely and
+/// discards whatever was already retained.
+pub(crate) const MIN_PASSWORD_HISTORY_LIMIT: u64 = 0;
+pub(crate) const MAX_PASSWORD_HISTORY_LIMIT: u64 = 50;
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub auto_lock_secs: u64,
     pub clipboard_clear_secs: u64,
+    pub password_history_limit: u64,
 }
 
 fn read_u64_setting(conn: &rusqlite::Connection, key: &str, default: u64) -> u64 {
@@ -50,11 +57,23 @@ fn auto_lock_secs(conn: &rusqlite::Connection) -> u64 {
         .clamp(MIN_AUTO_LOCK_SECS, MAX_AUTO_LOCK_SECS)
 }
 
+/// How many previous passwords to retain per entry, clamped on read for the
+/// same reason as the other stored numbers.
+pub(crate) fn password_history_limit(conn: &rusqlite::Connection) -> u64 {
+    read_u64_setting(
+        conn,
+        "password_history_limit",
+        DEFAULT_PASSWORD_HISTORY_LIMIT,
+    )
+    .clamp(MIN_PASSWORD_HISTORY_LIMIT, MAX_PASSWORD_HISTORY_LIMIT)
+}
+
 fn get_settings_impl(state: &AppState) -> Result<Settings, AppError> {
     with_state(state, |s| {
         Ok(Settings {
             auto_lock_secs: auto_lock_secs(&s.conn),
             clipboard_clear_secs: clipboard_clear_secs(&s.conn),
+            password_history_limit: password_history_limit(&s.conn),
         })
     })
 }
@@ -72,18 +91,32 @@ fn update_settings_impl(state: &AppState, input: Settings) -> Result<Settings, A
             "clipboard clear delay must be between 1 and 600 seconds",
         ));
     }
+    if input.password_history_limit > MAX_PASSWORD_HISTORY_LIMIT {
+        return Err(AppError::Validation(
+            "password history limit must be between 0 and 50",
+        ));
+    }
     with_authorized(state, |s| {
         let now = now_iso8601();
+        // One transaction so the retention trim below can never outlive a
+        // failed settings write (it deletes secrets that the old limit kept).
+        let tx = s.conn.transaction()?;
         for (key, value) in [
             ("auto_lock_secs", input.auto_lock_secs),
             ("clipboard_clear_secs", input.clipboard_clear_secs),
+            ("password_history_limit", input.password_history_limit),
         ] {
-            s.conn.execute(
+            tx.execute(
                 "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
                 rusqlite::params![key, value.to_string(), now],
             )?;
         }
+        // Apply a lowered limit to history that already exists, rather than
+        // only to future password changes - otherwise turning history down (or
+        // off) would leave the old secrets sitting in the database.
+        super::history::prune_all_history(&tx, input.password_history_limit)?;
+        tx.commit()?;
         Ok(input)
     })
 }
@@ -121,6 +154,7 @@ mod tests {
         Settings {
             auto_lock_secs,
             clipboard_clear_secs,
+            password_history_limit: DEFAULT_PASSWORD_HISTORY_LIMIT,
         }
     }
 
@@ -307,6 +341,107 @@ mod tests {
         }
         let s = get_settings_impl(&state).unwrap();
         assert_eq!(s.auto_lock_secs, DEFAULT_AUTO_LOCK_SECS);
+    }
+
+    #[test]
+    fn history_limit_round_trips_and_is_clamped_on_read() {
+        let state = unlocked_state();
+        assert_eq!(
+            get_settings_impl(&state).unwrap().password_history_limit,
+            DEFAULT_PASSWORD_HISTORY_LIMIT
+        );
+
+        let saved = update_settings_impl(
+            &state,
+            Settings {
+                password_history_limit: 3,
+                ..settings(300, 15)
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.password_history_limit, 3);
+        assert_eq!(get_settings_impl(&state).unwrap().password_history_limit, 3);
+
+        // A hand-edited row above the maximum must not let history grow without
+        // bound.
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE settings SET value = '9999' WHERE key = 'password_history_limit'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            get_settings_impl(&state).unwrap().password_history_limit,
+            MAX_PASSWORD_HISTORY_LIMIT
+        );
+    }
+
+    #[test]
+    fn update_rejects_history_limit_above_maximum() {
+        let state = unlocked_state();
+        assert!(matches!(
+            update_settings_impl(
+                &state,
+                Settings {
+                    password_history_limit: MAX_PASSWORD_HISTORY_LIMIT + 1,
+                    ..settings(300, 15)
+                }
+            ),
+            Err(AppError::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn update_accepts_zero_history_limit_and_discards_retained_history() {
+        let state = unlocked_state();
+        {
+            let guard = state.inner.lock().unwrap();
+            guard
+                .conn
+                .execute(
+                    "INSERT INTO password_entries
+                        (id, title, username, url_or_app_name,
+                         encrypted_password, password_nonce, created_at, updated_at)
+                     VALUES (1, 'E', 'u', 'x', X'00', X'00',
+                             '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                    [],
+                )
+                .unwrap();
+            guard
+                .conn
+                .execute(
+                    "INSERT INTO password_history
+                        (entry_id, encrypted_password, password_nonce, changed_at)
+                     VALUES (1, X'AA', X'BB', '2026-01-01T00:00:00Z')",
+                    [],
+                )
+                .unwrap();
+        }
+
+        let saved = update_settings_impl(
+            &state,
+            Settings {
+                password_history_limit: 0,
+                ..settings(300, 15)
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.password_history_limit, 0);
+
+        // Turning history off must delete what was already retained, not just
+        // stop recording new rows.
+        let remaining: i64 = state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row("SELECT COUNT(*) FROM password_history", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 0);
     }
 
     #[test]
