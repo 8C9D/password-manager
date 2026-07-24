@@ -66,6 +66,10 @@ struct ExportEntry {
 #[serde(rename_all = "camelCase")]
 struct ExportSettings {
     auto_lock_secs: Option<u64>,
+    /// `#[serde(default)]` keeps older export files (which lacked this field)
+    /// readable.
+    #[serde(default)]
+    clipboard_clear_secs: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -172,20 +176,24 @@ fn gather_payload(
         });
     }
 
-    let auto_lock_secs: Option<u64> = s
-        .conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'auto_lock_secs'",
-            [],
-            |r| r.get::<_, String>(0),
-        )
-        .ok()
-        .and_then(|v| v.parse().ok());
+    let read_setting = |key: &str| -> Option<u64> {
+        s.conn
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok()
+            .and_then(|v| v.parse().ok())
+    };
+    let auto_lock_secs = read_setting("auto_lock_secs");
+    let clipboard_clear_secs = read_setting("clipboard_clear_secs");
 
     Ok(ExportPayload {
         categories,
         entries,
-        settings: ExportSettings { auto_lock_secs },
+        settings: ExportSettings {
+            auto_lock_secs,
+            clipboard_clear_secs,
+        },
     })
 }
 
@@ -936,6 +944,31 @@ mod tests {
             )
             .unwrap();
         assert_eq!(created, "2026-02-03T04:05:06Z");
+    }
+
+    #[test]
+    fn export_carries_both_settings() {
+        let source = state_with_vault(PW);
+        {
+            let guard = source.inner.lock().unwrap();
+            guard
+                .conn
+                .execute_batch(
+                    "INSERT INTO settings (key, value, updated_at)
+                     VALUES ('auto_lock_secs', '600', '2026-01-01T00:00:00Z');
+                     INSERT INTO settings (key, value, updated_at)
+                     VALUES ('clipboard_clear_secs', '45', '2026-01-01T00:00:00Z');",
+                )
+                .unwrap();
+        }
+
+        let file = TempFile::new("settings-export.json");
+        export_vault_impl(&source, PW.into(), &file.0).unwrap();
+
+        let parsed = parse_export_file(&std::fs::read(&file.0).unwrap()).unwrap();
+        let payload = decrypt_payload(&parsed, PW).unwrap();
+        assert_eq!(payload.settings.auto_lock_secs, Some(600));
+        assert_eq!(payload.settings.clipboard_clear_secs, Some(45));
     }
 
     #[test]
