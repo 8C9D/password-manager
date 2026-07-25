@@ -10,6 +10,7 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { open, save } from '@tauri-apps/plugin-dialog';
 
+import { ConfirmService } from '../../core/services/confirm.service';
 import { SettingsService } from '../../core/services/settings.service';
 import { formatBackendError } from '../../core/services/tauri-invoke';
 import { VaultService } from '../../core/services/vault.service';
@@ -38,6 +39,7 @@ const PRESETS: Preset[] = [
 export class SettingsComponent implements OnInit, OnDestroy {
   private readonly settings = inject(SettingsService);
   private readonly vault = inject(VaultService);
+  private readonly confirmSvc = inject(ConfirmService);
 
   // One tracked timer per message signal: a re-save within the flash window
   // must restart its own timer, not have the message wiped early by the
@@ -199,6 +201,51 @@ export class SettingsComponent implements OnInit, OnDestroy {
       );
     } finally {
       this.importBusy.set(false);
+    }
+  }
+
+  protected csvExportPw = '';
+  protected readonly csvExportBusy = signal(false);
+  protected readonly csvExportErrorMsg = signal<string | null>(null);
+  protected readonly csvExportSavedMsg = signal<string | null>(null);
+
+  protected async onExportCsv(): Promise<void> {
+    if (!this.csvExportPw || this.csvExportBusy()) return;
+    // An unencrypted dump of every password is worth one deliberate pause, on
+    // top of the master-password check the backend already enforces.
+    const ok = await this.confirmSvc.ask({
+      title: 'Export passwords in plain text?',
+      message:
+        'The file will contain every password unencrypted, readable by anything that can open it. Save it somewhere you control and delete it when you are done.',
+      confirmLabel: 'Export anyway',
+      danger: true,
+    });
+    if (!ok) return;
+
+    this.csvExportBusy.set(true);
+    this.csvExportErrorMsg.set(null);
+    this.csvExportSavedMsg.set(null);
+    try {
+      const date = new Date().toISOString().slice(0, 10);
+      const path = await save({
+        title: 'Export passwords as CSV',
+        defaultPath: `vault-passwords-${date}.csv`,
+        filters: [{ name: 'CSV', extensions: ['csv'] }],
+      });
+      if (!path) return;
+      await this.vault.exportCsv(this.csvExportPw, path);
+      this.csvExportPw = '';
+      this.flash(
+        this.csvExportSavedMsg,
+        'Plain-text CSV saved. Delete it once you have imported it elsewhere.',
+        8000,
+      );
+    } catch (e) {
+      this.csvExportErrorMsg.set(
+        formatBackendError(e, { wrong_password: 'Master password is incorrect.' }),
+      );
+    } finally {
+      this.csvExportBusy.set(false);
     }
   }
 

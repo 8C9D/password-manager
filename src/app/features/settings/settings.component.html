@@ -233,5 +233,43 @@
         </button>
       </div>
     </section>
+
+    <section class="section">
+      <h3>Export to CSV</h3>
+      <p class="warn small">
+        This writes every password to disk unencrypted. Anything that can read the file can read
+        your passwords. Use it only to move into another password manager, then delete the file.
+      </p>
+      <p class="muted small">
+        For backups, use the encrypted export above instead. Password history is not included.
+      </p>
+      <form (ngSubmit)="onExportCsv()" class="pw-form">
+        <label>
+          Master password
+          <input
+            type="password"
+            [(ngModel)]="csvExportPw"
+            name="csvExportPw"
+            autocomplete="current-password"
+            required
+          />
+        </label>
+        @if (csvExportErrorMsg()) {
+          <p class="warn">{{ csvExportErrorMsg() }}</p>
+        }
+        @if (csvExportSavedMsg()) {
+          <p class="ok">{{ csvExportSavedMsg() }}</p>
+        }
+        <div class="actions">
+          <button
+            type="submit"
+            class="btn danger"
+            [disabled]="!csvExportPw || csvExportBusy()"
+          >
+            {{ csvExportBusy() ? 'Exporting…' : 'Export plain-text CSV…' }}
+          </button>
+        </div>
+      </form>
+    </section>
   }
 </div>

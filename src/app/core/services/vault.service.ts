@@ -59,6 +59,10 @@ export class VaultService {
     await call<void>('export_vault', { masterPassword, path });
   }
 
+  async exportCsv(masterPassword: string, path: string): Promise<void> {
+    await call<void>('export_csv', { masterPassword, path });
+  }
+
   async importVault(path: string, password: string): Promise<ImportSummary> {
     const summary = await call<ImportSummary>('import_vault', { path, password });
     await this.refreshAfterImport();

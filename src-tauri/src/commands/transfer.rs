@@ -335,6 +335,119 @@ pub fn export_vault(
     export_vault_impl(&state, master_password, Path::new(&path))
 }
 
+// --- Plaintext CSV export ---
+
+/// Quote a field per RFC 4180 when it contains a delimiter, a quote, or a line
+/// break; doubling any embedded quote.
+fn csv_escape(field: &str) -> String {
+    if field.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_string()
+    }
+}
+
+/// Percent-encode everything outside the RFC 3986 unreserved set.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Render a TOTP config as an `otpauth://` URI so a bare base32 secret does not
+/// silently drop a non-default algorithm, digit count, or period.
+fn totp_uri(config: &TotpConfig, label: &str) -> String {
+    let algorithm = match config.algorithm {
+        crate::crypto::totp::TotpAlgorithm::Sha1 => "SHA1",
+        crate::crypto::totp::TotpAlgorithm::Sha256 => "SHA256",
+        crate::crypto::totp::TotpAlgorithm::Sha512 => "SHA512",
+    };
+    format!(
+        "otpauth://totp/{}?secret={}&algorithm={}&digits={}&period={}",
+        percent_encode(label),
+        percent_encode(&config.secret_base32),
+        algorithm,
+        config.digits,
+        config.period,
+    )
+}
+
+/// Column headers chosen so this file is re-importable by `import_csv` and by
+/// the mainstream managers it already understands.
+const CSV_HEADERS: &[&str] = &[
+    "name", "username", "password", "url", "notes", "folder", "totp", "favorite", "tags",
+];
+
+fn build_csv(payload: &ExportPayload) -> String {
+    let mut out = String::new();
+    out.push_str(&CSV_HEADERS.join(","));
+    out.push_str("\r\n");
+    for e in &payload.entries {
+        let fields = [
+            e.title.clone(),
+            e.username.clone(),
+            e.password.clone(),
+            e.url_or_app_name.clone(),
+            e.notes.clone().unwrap_or_default(),
+            e.category.clone().unwrap_or_default(),
+            e.totp
+                .as_ref()
+                .map(|c| totp_uri(c, &e.title))
+                .unwrap_or_default(),
+            if e.is_favorite { "1" } else { "0" }.to_string(),
+            e.tags.join(","),
+        ];
+        let row: Vec<String> = fields.iter().map(|f| csv_escape(f)).collect();
+        out.push_str(&row.join(","));
+        out.push_str("\r\n");
+    }
+    out
+}
+
+/// Write every password to `path` in the clear.
+///
+/// The master password is required for the same reason the encrypted export
+/// requires it: this produces an unprotected copy of the whole vault, so it
+/// must not be reachable from a merely-unlocked session left unattended.
+/// Password history is deliberately left out - retired secrets have no place in
+/// an interchange file.
+fn export_csv_impl(
+    state: &AppState,
+    master_password: String,
+    path: &Path,
+) -> Result<(), AppError> {
+    let master_password = Zeroizing::new(master_password);
+
+    let (salt, encrypted_test, test_nonce) = with_state(state, |s| {
+        if s.key.is_none() {
+            return Err(AppError::Locked);
+        }
+        read_vault_crypto_row(&s.conn)
+    })?;
+    let vault_key = verify_password(&salt, &encrypted_test, &test_nonce, &master_password)?;
+
+    let payload = with_state(state, |s| gather_payload(s, &vault_key))?;
+    let csv = Zeroizing::new(build_csv(&payload));
+    write_atomically(path, csv.as_bytes())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn export_csv(
+    state: State<'_, AppState>,
+    master_password: String,
+    path: String,
+) -> Result<(), AppError> {
+    export_csv_impl(&state, master_password, Path::new(&path))
+}
+
 fn parse_export_file(bytes: &[u8]) -> Result<ExportFile, AppError> {
     let file: ExportFile = serde_json::from_slice(bytes)
         .map_err(|_| AppError::Validation("not a valid export file"))?;
@@ -1164,6 +1277,185 @@ mod tests {
         rows.into_iter()
             .map(|(c, n)| String::from_utf8(crypto::decrypt(&key, &c, &n).unwrap()).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn csv_escape_quotes_only_when_required() {
+        assert_eq!(csv_escape("plain"), "plain");
+        assert_eq!(csv_escape("has,comma"), "\"has,comma\"");
+        assert_eq!(csv_escape("has\"quote"), "\"has\"\"quote\"");
+        assert_eq!(csv_escape("has\nnewline"), "\"has\nnewline\"");
+        assert_eq!(csv_escape("has\r\ncrlf"), "\"has\r\ncrlf\"");
+        assert_eq!(csv_escape(""), "");
+    }
+
+    #[test]
+    fn percent_encode_escapes_everything_outside_the_unreserved_set() {
+        assert_eq!(percent_encode("aZ0-._~"), "aZ0-._~");
+        assert_eq!(percent_encode("a b"), "a%20b");
+        assert_eq!(percent_encode("a/b?c=d&e"), "a%2Fb%3Fc%3Dd%26e");
+        // Multi-byte characters are encoded per UTF-8 byte.
+        assert_eq!(percent_encode("é"), "%C3%A9");
+    }
+
+    #[test]
+    fn export_csv_round_trips_back_through_our_own_importer() {
+        let source = state_with_vault(PW);
+        let work = add_category(&source, "Work");
+        // Fields that exercise the escaping: a comma, a quote, and a newline.
+        add_entry(
+            &source,
+            "Site, Inc \"HQ\"",
+            "p@ss,word",
+            Some("line one\nline two"),
+            Some(work),
+        );
+        add_entry(&source, "Bank", "s3cret!", None, None);
+
+        let file = TempFile::new("export.csv");
+        export_csv_impl(&source, PW.into(), &file.0).unwrap();
+        let csv = std::fs::read_to_string(&file.0).unwrap();
+        assert!(csv.starts_with("name,username,password,url,notes,folder,totp,favorite,tags\r\n"));
+
+        // Importing our own CSV into a fresh vault must reproduce the entries,
+        // which is the only check that proves the escaping is actually correct.
+        let target = state_with_vault(PW);
+        let summary = import_csv_content_impl(&target, &csv).unwrap();
+        assert_eq!(summary.imported, 2);
+        assert_eq!(summary.skipped, 0);
+
+        let mut rows = decrypted_entries(&target);
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec![
+                ("Bank".to_string(), "s3cret!".to_string(), None, None),
+                (
+                    "Site, Inc \"HQ\"".to_string(),
+                    "p@ss,word".to_string(),
+                    Some("line one\nline two".to_string()),
+                    Some("Work".to_string()),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn export_csv_preserves_non_default_totp_parameters_through_a_round_trip() {
+        use crate::crypto::totp::{TotpAlgorithm, TotpConfig};
+
+        let source = state_with_vault(PW);
+        add_entry(&source, "Email", "pw", None, None);
+        // A bare base32 secret in the CSV would silently reset these to the
+        // defaults on the way back in.
+        let config = TotpConfig {
+            secret_base32: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".into(),
+            algorithm: TotpAlgorithm::Sha256,
+            digits: 8,
+            period: 60,
+        };
+        {
+            let key = **source.inner.lock().unwrap().key.as_ref().unwrap();
+            let json = serde_json::to_vec(&config).unwrap();
+            let ct = crypto::encrypt(&key, &json).unwrap();
+            let guard = source.inner.lock().unwrap();
+            guard
+                .conn
+                .execute(
+                    "UPDATE password_entries SET encrypted_totp = ?1, totp_nonce = ?2
+                     WHERE title = 'Email'",
+                    rusqlite::params![ct.bytes, ct.nonce.as_slice()],
+                )
+                .unwrap();
+        }
+
+        let file = TempFile::new("export-totp.csv");
+        export_csv_impl(&source, PW.into(), &file.0).unwrap();
+        let csv = std::fs::read_to_string(&file.0).unwrap();
+
+        let target = state_with_vault(PW);
+        import_csv_content_impl(&target, &csv).unwrap();
+
+        let (enc, nonce): (Vec<u8>, Vec<u8>) = target
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row(
+                "SELECT encrypted_totp, totp_nonce FROM password_entries WHERE title = 'Email'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let key = **target.inner.lock().unwrap().key.as_ref().unwrap();
+        let restored: TotpConfig =
+            serde_json::from_slice(&crypto::decrypt(&key, &enc, &nonce).unwrap()).unwrap();
+        assert_eq!(restored.secret_base32, config.secret_base32);
+        assert_eq!(restored.algorithm, TotpAlgorithm::Sha256);
+        assert_eq!(restored.digits, 8);
+        assert_eq!(restored.period, 60);
+    }
+
+    #[test]
+    fn export_csv_requires_the_master_password_and_an_unlocked_vault() {
+        let state = state_with_vault(PW);
+        add_entry(&state, "GitHub", "hunter2", None, None);
+        let file = TempFile::new("export-denied.csv");
+
+        assert!(matches!(
+            export_csv_impl(&state, "wrong-password".into(), &file.0),
+            Err(AppError::WrongPassword)
+        ));
+        // Nothing may be written on a rejected attempt.
+        assert!(!file.0.exists());
+
+        state.inner.lock().unwrap().key = None;
+        assert!(matches!(
+            export_csv_impl(&state, PW.into(), &file.0),
+            Err(AppError::Locked)
+        ));
+        assert!(!file.0.exists());
+    }
+
+    #[test]
+    fn export_csv_marks_favorites_so_the_flag_survives_a_round_trip() {
+        let source = state_with_vault(PW);
+        add_entry(&source, "Starred", "pw1", None, None);
+        add_entry(&source, "Plain", "pw2", None, None);
+        source
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries SET is_favorite = 1 WHERE title = 'Starred'",
+                [],
+            )
+            .unwrap();
+
+        let file = TempFile::new("export-fav.csv");
+        export_csv_impl(&source, PW.into(), &file.0).unwrap();
+        let csv = std::fs::read_to_string(&file.0).unwrap();
+
+        let target = state_with_vault(PW);
+        import_csv_content_impl(&target, &csv).unwrap();
+        let favorites: Vec<(String, bool)> = {
+            let guard = target.inner.lock().unwrap();
+            let mut stmt = guard
+                .conn
+                .prepare("SELECT title, is_favorite FROM password_entries ORDER BY title")
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            rows
+        };
+        assert_eq!(
+            favorites,
+            vec![("Plain".to_string(), false), ("Starred".to_string(), true)]
+        );
     }
 
     #[test]

@@ -53,6 +53,7 @@ pub fn run() {
             commands::settings::update_settings,
             commands::clipboard::copy_to_clipboard,
             commands::transfer::export_vault,
+            commands::transfer::export_csv,
             commands::transfer::import_vault,
             commands::transfer::import_csv,
         ])

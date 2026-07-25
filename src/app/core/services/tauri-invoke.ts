@@ -39,6 +39,7 @@ export type TauriCommand =
   | 'update_settings'
   | 'copy_to_clipboard'
   | 'export_vault'
+  | 'export_csv'
   | 'import_vault'
   | 'import_csv';
 
