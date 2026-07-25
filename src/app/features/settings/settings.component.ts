@@ -16,6 +16,11 @@ import {
   validateSettingsForm,
 } from '../../core/services/settings.service';
 import { formatBackendError } from '../../core/services/tauri-invoke';
+import {
+  ThemePreference,
+  THEME_OPTIONS,
+  ThemeService,
+} from '../../core/services/theme.service';
 import { VaultService } from '../../core/services/vault.service';
 import { PasswordStrengthMeterComponent } from '../password-strength/password-strength-meter.component';
 
@@ -89,6 +94,14 @@ export class SettingsComponent implements OnInit, OnDestroy {
   protected readonly pwSavedMsg = signal<string | null>(null);
 
   protected readonly bounds = this.settings.bounds;
+
+  private readonly theme = inject(ThemeService);
+  protected readonly themeOptions = THEME_OPTIONS;
+  protected readonly themePreference = this.theme.preference;
+
+  protected onThemeChange(preference: ThemePreference): void {
+    this.theme.set(preference);
+  }
 
   async ngOnInit(): Promise<void> {
     try {

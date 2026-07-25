@@ -8,6 +8,25 @@
     <p class="muted">Loading…</p>
   } @else {
     <section class="section">
+      <h3 id="appearance-heading">Appearance</h3>
+      <p class="muted small">
+        System follows your operating system's light or dark setting.
+      </p>
+      <div class="presets" role="radiogroup" aria-labelledby="appearance-heading">
+        @for (option of themeOptions; track option.value) {
+          <button
+            type="button"
+            class="btn small"
+            role="radio"
+            [class.primary]="themePreference() === option.value"
+            [attr.aria-checked]="themePreference() === option.value"
+            (click)="onThemeChange(option.value)"
+          >
+            {{ option.label }}
+          </button>
+        }
+      </div>
+
       <h3>Auto-lock</h3>
       <p class="muted small">
         Vault will lock automatically after this many seconds of inactivity

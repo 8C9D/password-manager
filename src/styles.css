@@ -1,3 +1,9 @@
+/*
+ * Light is the base. Dark applies either because the OS asks for it and the
+ * user has not overridden it, or because they explicitly picked it - hence the
+ * two selectors carrying the same block. `data-theme` is set by ThemeService;
+ * "system" removes the attribute so the media query decides.
+ */
 :root {
   --bg: #ffffff;
   --surface: #fafafa;
@@ -9,11 +15,12 @@
   --accent-soft: #e5edff;
   --accent-strong: #1e40af;
   --danger: #b91c1c;
+  color-scheme: light;
   font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #16181d;
     --surface: #1d2026;
     --text: #e8eaed;
@@ -24,7 +31,22 @@
     --accent-soft: #1f2a47;
     --accent-strong: #c8d8ff;
     --danger: #ff8080;
+    color-scheme: dark;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #16181d;
+  --surface: #1d2026;
+  --text: #e8eaed;
+  --muted: #98a0ac;
+  --border: #2a2f37;
+  --hover: #232831;
+  --accent: #6ea8ff;
+  --accent-soft: #1f2a47;
+  --accent-strong: #c8d8ff;
+  --danger: #ff8080;
+  color-scheme: dark;
 }
 
 * {
