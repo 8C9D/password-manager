@@ -85,6 +85,18 @@ select {
   filter: brightness(1.05);
 }
 
+/* Outline variant for destructive actions. The confirm dialog deliberately
+   overrides this with a filled treatment, since there the destructive action
+   is the primary one. */
+.btn.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.btn.danger:hover {
+  background: rgba(185, 28, 28, 0.08);
+}
+
 .btn.small {
   padding: 0.3rem 0.6rem;
   font-size: 0.8rem;

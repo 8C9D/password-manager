@@ -63,7 +63,3 @@
 .muted {
   color: var(--muted);
 }
-.btn.danger {
-  color: var(--danger);
-  border-color: var(--danger);
-}

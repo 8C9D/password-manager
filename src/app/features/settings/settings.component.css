@@ -95,10 +95,3 @@
 .small {
   font-size: 0.85rem;
 }
-.btn.danger {
-  color: var(--danger);
-  border-color: var(--danger);
-}
-.btn.danger:hover {
-  background: rgba(185, 28, 28, 0.08);
-}

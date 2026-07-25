@@ -20,13 +20,6 @@
   display: flex;
   gap: 0.4rem;
 }
-.btn.danger {
-  color: var(--danger);
-  border-color: var(--danger);
-}
-.btn.danger:hover {
-  background: rgba(185, 28, 28, 0.08);
-}
 dl {
   display: grid;
   grid-template-columns: 130px 1fr;
