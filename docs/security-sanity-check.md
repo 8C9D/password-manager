@@ -1,6 +1,6 @@
 # Security Sanity Check
 
-_Last verified 2026-07-24 on `main`, against Angular 21.2.18 / Tauri 2.11 and 27 exposed commands._
+_Last verified 2026-07-25 on `main`, against Angular 21.2.18 / Tauri 2.11 and 32 exposed commands._
 _This is a practical hygiene review, not a formal penetration test or full audit._
 
 ## 1. Scope
@@ -12,7 +12,7 @@ No exploitation, no external network probing.
 
 - **App:** local-only personal password manager. No server, no network sync.
 - **Frontend:** Angular 21 (TypeScript), Vitest tests.
-- **Backend:** Tauri 2 (Rust) exposing 27 `#[tauri::command]`s.
+- **Backend:** Tauri 2 (Rust) exposing 32 `#[tauri::command]`s.
 - **Storage:** SQLite (`rusqlite`, bundled) at `app_data_dir/vault.db`, outside the repo.
 - **Crypto:** Argon2id KDF (m = 64 MiB, t = 3, p = 1) then AES-256-GCM; random salt, fresh per-message nonce; keys and master passwords wrapped in `Zeroizing`.
 - **Env vars:** none used.
@@ -27,7 +27,23 @@ Crypto choices are sound, all SQL is parameterized, there is no `unsafe` Rust, n
 The two findings that were open in the 2026-05 passes are both closed: a restrictive CSP is now configured, and CI runs both `npm audit` and a blocking `cargo audit`.
 The one item found open in this pass (vulnerable Angular runtime packages) was fixed during it.
 
-## 4. Findings
+## 4. Hardening Applied 2026-07-25
+
+No new vulnerabilities were found in this pass; the items below are defence-in-depth changes made alongside that session's feature work.
+
+- **Export payload secrets are now wiped on drop.**
+  `ExportEntry` and `ExportHistoryItem` held every password, note, and retired password as plain `String`s, which were freed without being cleared.
+  They now use a `SecretString` newtype over `Zeroizing<String>` that serializes identically, so the export format is unchanged, and redacts itself in `Debug`.
+  This narrows the window in which freed heap holds vault plaintext after an export; it was a hardening gap, not an exploitable flaw, since anyone who can read this process's memory can already read the unlocked key.
+- **Deleting an entry is now a soft delete.**
+  Trashed rows keep their ciphertext and are excluded from listing, reading, editing, export, and the health scan.
+  They are deliberately **included** in the master-password re-encryption sweep, because skipping them would leave rows that no key could decrypt after a rekey; a regression test fails if that wiring is removed.
+  `purge_entry` and `purge_all_entries` are the only paths that destroy data, and password history cascades with the row.
+- **Theme preference is stored in `localStorage`, not the vault.**
+  It has to apply on the locked unlock screen, and nothing about it is secret, so no vault data moved out of the encrypted database.
+  The stored value is treated as untrusted and narrowed to a known preference on read.
+
+## 5. Findings
 
 ### Finding 1 - Vulnerable Angular runtime packages shipped in the binary _(resolved 2026-07-24)_
 
@@ -57,7 +73,7 @@ Preventive rules for `.env`, `.env.*` (with a `!.env.example` exception), `*.sql
 
 The README now documents the local-storage model, the KDF and cipher, and that a forgotten master password is unrecoverable.
 
-## 5. Secrets and Sensitive Files
+## 6. Secrets and Sensitive Files
 
 Searches for `API_KEY` / `SECRET` / `PASSWORD` / `TOKEN` / `PRIVATE_KEY` / `BEGIN RSA` / `BEGIN OPENSSH` / `DATABASE_URL` / `client_secret` / `access_key` / `bearer` over tracked source return only legitimate code: struct fields (`password`, `clipboard_token`), error strings, and a redaction unit test in `error.rs` asserting that a fake path does *not* reach the frontend.
 Test fixtures use obviously-fake values (`hunter2`, `newpass`).
@@ -68,7 +84,7 @@ No `.env`, `*.pem`, `*.key`, `id_rsa*`, service-account JSON, or `*.db` / `*.sql
 
 **No real secrets found.**
 
-## 6. Authentication and Authorization
+## 7. Authentication and Authorization
 
 - **Master password to key:** Argon2id (m = 65536 KiB, t = 3, p = 1, 32-byte output) with a 16-byte `OsRng` salt, verified by decrypting a stored AES-256-GCM test value. Mismatch returns `WrongPassword`.
 - **Unlock backoff:** consecutive failures are counted *at the gate* before the KDF runs, then escalate 1 s doubling to a 300 s cap after 5 free attempts. This slows interactive guessing only; the Argon2id cost is what defends a copied vault file.
@@ -77,7 +93,7 @@ No `.env`, `*.pem`, `*.key`, `id_rsa*`, service-account JSON, or `*.db` / `*.sql
 - **Auto-lock:** configurable 30 s to 24 h, clamped on read so a hand-edited row cannot disable it. Only a return to visibility counts as activity; the window becoming hidden does not restart the countdown.
 - Keys and master passwords are held in `Zeroizing`, including the per-command stack copy handed to `with_unlocked`.
 
-## 7. Input Validation and Unsafe Operations
+## 8. Input Validation and Unsafe Operations
 
 - **SQL injection:** none. Every query uses bound parameters; no `format!`-built SQL. Sorting uses fixed `COLLATE NOCASE` clauses.
 - **Unsafe Rust / command execution:** none. No `unsafe`, no `std::process`.
@@ -88,7 +104,7 @@ No `.env`, `*.pem`, `*.key`, `id_rsa*`, service-account JSON, or `*.db` / `*.sql
 - **Frontend XSS:** no `innerHTML` / `[innerHTML]`, `outerHTML`, `document.write`, `eval`, `javascript:`, `bypassSecurityTrust*`, or `DomSanitizer` usage. Angular auto-escaping is intact.
 - **Logging:** the application emits no log records of its own. `tauri-plugin-log` is enabled at `Info` for framework diagnostics. `database` / `io` / `internal` errors are serialized opaquely so internal detail never reaches the frontend.
 
-## 8. Dependencies and Tooling
+## 9. Dependencies and Tooling
 
 - `npm audit --omit=dev` → **0 vulnerabilities** (2026-07-24, after Finding 1).
 - `npm audit` including dev dependencies reports 3 moderate advisories in build tooling (`@angular/cli` and two transitive MCP-server packages). These are not compiled into the shipped binary, which is why CI treats the npm audit as informational.
@@ -96,11 +112,11 @@ No `.env`, `*.pem`, `*.key`, `id_rsa*`, service-account JSON, or `*.db` / `*.sql
 - Backend crates are current: `argon2 0.5`, `aes-gcm 0.10`, `rand 0.8`, `zeroize 1.8`, `rusqlite 0.32`, `tauri 2.11`. The release profile strips symbols.
 - Both lockfiles are committed. No risky lifecycle scripts in `package.json`.
 
-## 9. CI
+## 10. CI
 
 `.github/workflows/ci.yml` runs `cargo test` and `cargo clippy -D warnings` on a pinned toolchain, the frontend `ng test` and `ng build`, an informational `npm audit`, and a blocking `cargo audit`.
 
-## 10. Known Limits of This Review
+## 11. Known Limits of This Review
 
 - Static inspection only; no fuzzing, no runtime instrumentation, no side-channel analysis.
 - CSP enforcement, native dialogs, and real clipboard behavior can only be confirmed in a built Tauri binary. The browser harness used for UI verification mocks the IPC layer and therefore proves nothing about CSP.

@@ -1,6 +1,6 @@
 # Test Coverage
 
-_Last verified 2026-07-24 on `main`: 203 Rust unit tests and 84 Vitest tests, all green._
+_Last verified 2026-07-25 on `main`: 230 Rust unit tests and 111 Vitest tests, all green._
 
 ## 1. How to Run
 
@@ -13,34 +13,38 @@ Both run in CI on every push, alongside `cargo clippy -D warnings` and `ng build
 
 ## 2. Where the Coverage Is
 
-### Backend - 203 tests
+### Backend - 230 tests
 
 | Module | Tests | What they cover |
 | --- | --- | --- |
-| `commands/transfer` | 40 | Encrypted export/import round trips, CSV import and export, RFC 4180 parsing, atomic file writes |
-| `commands/entries` | 29 | CRUD, TOTP set/keep/clear, tags and favorites, `password_changed_at` semantics |
-| `commands/vault` | 20 | Create/unlock/lock, master-password change and its re-encryption sweep, unlock backoff |
-| `commands/settings` | 19 | Persistence, range validation, clamping of hand-edited rows |
+| `commands/transfer` | 46 | Encrypted export/import round trips, CSV import and export (tags and rotation reminder included), RFC 4180 parsing, atomic file writes, trash exclusion |
+| `commands/entries` | 44 | CRUD, TOTP set/keep/clear, tags and favorites, `password_changed_at` semantics, trash/restore/purge, rotation-reminder due dates |
+| `commands/vault` | 21 | Create/unlock/lock, master-password change and its re-encryption sweep (trashed entries included), unlock backoff |
+| `commands/settings` | 20 | Persistence, range validation, clamping of hand-edited rows, published bounds matching the real validator |
 | `crypto/totp` | 16 | RFC 6238 vectors, base32 decoding, `otpauth://` parsing |
 | `commands/history` | 13 | Recording on rotation, retention pruning, cascade on delete |
 | `commands/categories` | 13 | CRUD, unique-name mapping, character-based length limit |
 | `commands/generator` | 10 | Class guarantees, ambiguous exclusion, length bounds |
 | `db` | 9 | Migration sequencing, idempotency, rollback, v0 upgrade with data |
-| `commands/health` | 8 | Weak/reused/stale classification |
+| `commands/health` | 12 | Weak/reused/stale/due classification, trash exclusion |
 | `crypto/aead` | 7 | Round trip, tamper detection, randomized property test |
 | `state`, `error` | 12 | Lock gating, error redaction |
 | `crypto/kdf`, `commands/clipboard` | 7 | Key derivation, clipboard clear ownership |
 
-### Frontend - 84 tests across 6 spec files
+### Frontend - 111 tests across 10 spec files
 
 | Spec | Tests | What it covers |
 | --- | --- | --- |
-| `password-entry.service.spec.ts` | 37 | Filtering, sorting, tag parsing, TOTP action resolution, validation |
+| `password-entry.service.spec.ts` | 44 | Filtering, sorting, tag parsing, TOTP action resolution, validation, rotation-reminder parsing and countdown text |
 | `tauri-invoke.spec.ts` | 22 | Backend-error to user-message mapping |
 | `password-strength.spec.ts` | 11 | Entropy scoring |
-| `vault-layout.component.spec.ts` | 9 | Keyboard-shortcut dispatch and text-entry detection |
+| `vault-layout.component.spec.ts` | 11 | Keyboard-shortcut dispatch, text-entry detection, suppression behind an open modal |
 | `vault.service.spec.ts` | 3 | Create-vault form validity |
 | `auto-lock.service.spec.ts` | 2 | Which visibility transitions count as activity |
+| `settings.service.spec.ts` | 7 | Form validation driven by the backend's published bounds |
+| `clipboard.service.spec.ts` | 3 | Banner countdown, and dropping copies superseded by a lock or a newer copy |
+| `confirm-dialog.component.spec.ts` | 5 | Modal focus-trap wrapping |
+| `theme.service.spec.ts` | 3 | Theme preference parsed from untrusted storage |
 
 ## 3. The Testing Approach
 
@@ -89,4 +93,4 @@ It complements the unit suites rather than replacing them, and it proves nothing
 
 1. **A component-level harness** for the two components with real async state machines (`entry-detail`, `entry-form`). Their stale-response guards are currently protected only by manual browser checks.
 2. **A concurrency test for unlock backoff**, asserting that N simultaneous attempts consume N counts rather than sharing one pre-attempt read.
-3. **A migration test from each historical version**, not just v0, so a v2-era vault upgrading straight to v4 is covered.
+3. **A migration test from each historical version**, not just v0, so a v2-era vault upgrading straight to v6 is covered.
