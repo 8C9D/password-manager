@@ -53,7 +53,11 @@ export class EntryDetailComponent implements OnDestroy {
   private historyHideTimer: ReturnType<typeof setTimeout> | null = null;
   private totpTimer: ReturnType<typeof setInterval> | null = null;
   private totpEntryId: number | null = null;
-  private totpRefreshing = false;
+  // Which entry has a code request in flight, not merely whether one does. A
+  // plain boolean also blocked the *next* entry's first fetch when a
+  // navigation landed mid-refresh, so that entry showed no code and started no
+  // countdown - it looked like it had no 2FA at all.
+  private totpRefreshingFor: number | null = null;
   // Bumped on every load() so a slower in-flight load can detect it was
   // superseded by a newer navigation and skip mutating state.
   private loadToken = 0;
@@ -148,8 +152,8 @@ export class EntryDetailComponent implements OnDestroy {
     // Single-flight: the 1s tick keeps firing while remaining <= 0, and a
     // second concurrent refresh could interleave with this one's completion.
     const id = this.totpEntryId;
-    if (id === null || this.totpRefreshing) return;
-    this.totpRefreshing = true;
+    if (id === null || this.totpRefreshingFor === id) return;
+    this.totpRefreshingFor = id;
     try {
       const t = await this.entries.generateTotp(id);
       // The user navigated to another entry while this refresh was in
@@ -164,7 +168,8 @@ export class EntryDetailComponent implements OnDestroy {
       this.stopTotp();
       this.totpCode.set(null);
     } finally {
-      this.totpRefreshing = false;
+      // Only release the slot if a newer entry has not already claimed it.
+      if (this.totpRefreshingFor === id) this.totpRefreshingFor = null;
     }
   }
 
