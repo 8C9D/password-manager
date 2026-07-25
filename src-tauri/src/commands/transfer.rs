@@ -622,6 +622,14 @@ fn import_vault_impl(
                     "export file has an entry without a password",
                 ));
             }
+            if entry
+                .password_expiry_days
+                .is_some_and(|d| d > crate::commands::entries::MAX_EXPIRY_DAYS)
+            {
+                return Err(AppError::Validation(
+                    "export file has an entry with an out-of-range rotation reminder",
+                ));
+            }
             let pw_ct = crypto::encrypt(key, entry.password.as_bytes())?;
             let (notes_bytes, notes_nonce) = match entry.notes.as_deref() {
                 Some(n) if !n.is_empty() => {
@@ -2342,5 +2350,55 @@ mod tests {
             import_csv_content_impl(&state, csv),
             Err(AppError::Locked)
         ));
+    }
+    #[test]
+    fn import_rejects_an_out_of_range_rotation_reminder() {
+        // A hand-edited file was the one write path that skipped the interval
+        // bound `validate_input` enforces. The stored value then reached the
+        // date arithmetic in `password_due_at`, which panicked under the state
+        // mutex and poisoned it, so every later command failed too.
+        let mut entry = crafted_entry("Boom", "pw");
+        entry["passwordExpiryDays"] = serde_json::json!(4_000_000_000u32);
+        let payload = serde_json::json!({
+            "categories": [],
+            "entries": [entry],
+            "settings": {"autoLockSecs": null}
+        });
+        let file = TempFile::new("absurd-expiry.json");
+        write_crafted_export(&payload, &file);
+
+        let state = state_with_vault(PW);
+        let err = import_vault_impl(&state, &file.0, PW.into()).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+        assert!(decrypted_entries(&state).is_empty(), "nothing imported");
+    }
+
+    #[test]
+    fn import_accepts_a_reminder_at_the_limit() {
+        let mut entry = crafted_entry("Fine", "pw");
+        entry["passwordExpiryDays"] =
+            serde_json::json!(crate::commands::entries::MAX_EXPIRY_DAYS);
+        let payload = serde_json::json!({
+            "categories": [],
+            "entries": [entry],
+            "settings": {"autoLockSecs": null}
+        });
+        let file = TempFile::new("max-expiry.json");
+        write_crafted_export(&payload, &file);
+
+        let state = state_with_vault(PW);
+        import_vault_impl(&state, &file.0, PW.into()).unwrap();
+        let days: Option<u32> = state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row(
+                "SELECT password_expiry_days FROM password_entries",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(days, Some(crate::commands::entries::MAX_EXPIRY_DAYS));
     }
 }

@@ -129,13 +129,22 @@ fn expiry_to_column(days: Option<u32>) -> Option<u32> {
 ///
 /// `None` when there is no reminder, or when the stored timestamp cannot be
 /// parsed - an unreadable date must not manufacture a due date out of nothing.
+///
+/// The addition is checked rather than `+`: `validate_input` caps the interval
+/// at `MAX_EXPIRY_DAYS`, but the column can also come from an import file or a
+/// hand-edited database, and `DateTime + TimeDelta` *panics* on overflow. A
+/// panic here happens while the state mutex is held, which poisons it and takes
+/// every later command down with it, so an absurd interval reads as no
+/// reminder instead.
 pub(crate) fn password_due_at(
     password_changed_at: Option<&str>,
     expiry_days: Option<u32>,
 ) -> Option<String> {
     let days = expiry_to_column(expiry_days)?;
     let changed = chrono::DateTime::parse_from_rfc3339(password_changed_at?).ok()?;
-    let due = changed.with_timezone(&chrono::Utc) + chrono::Duration::days(i64::from(days));
+    let due = changed
+        .with_timezone(&chrono::Utc)
+        .checked_add_signed(chrono::TimeDelta::try_days(i64::from(days))?)?;
     Some(due.to_rfc3339())
 }
 
@@ -738,6 +747,21 @@ mod tests {
         assert!(password_due_at(None, Some(30)).is_none());
         let now = chrono::Utc::now();
         assert!(!password_is_due(Some("not a date"), Some(30), now));
+    }
+
+    #[test]
+    fn an_absurd_interval_yields_no_due_date_instead_of_panicking() {
+        // `validate_input` caps the interval, but the column can also arrive
+        // from a hand-edited database, and `DateTime + TimeDelta` panics on
+        // overflow - under the state mutex, which poisons it and breaks every
+        // later command until the app restarts.
+        assert!(password_due_at(Some("2026-01-01T00:00:00Z"), Some(u32::MAX)).is_none());
+        assert!(password_due_at(Some("2026-01-01T00:00:00Z"), Some(4_000_000_000)).is_none());
+        assert!(!password_is_due(
+            Some("2026-01-01T00:00:00Z"),
+            Some(u32::MAX),
+            chrono::Utc::now()
+        ));
     }
 
     #[test]
