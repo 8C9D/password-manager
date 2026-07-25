@@ -18,6 +18,10 @@ export class ClipboardService {
   // banner would both lie about the clipboard contents and leak that a
   // secret had been copied in the previous session.
   reset(): void {
+    // Supersede any copy still in flight. Without this a copy that started
+    // before the lock and resolved after it would sail past the sequence check
+    // and put the banner back up on the unlock screen.
+    this.copySeq++;
     if (this.tickTimer !== null) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
