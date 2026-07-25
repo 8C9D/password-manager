@@ -53,11 +53,17 @@ pub fn vault_status(state: State<'_, AppState>) -> Result<VaultStatus, AppError>
     vault_status_impl(&state)
 }
 
+pub(crate) const MIN_MASTER_PASSWORD_CHARS: usize = 8;
+
 fn validate_master_password(password: &str) -> Result<(), AppError> {
     if password.is_empty() {
         return Err(AppError::Validation("master password must not be empty"));
     }
-    if password.len() < 8 {
+    // Counted in characters, not bytes, for the same reason as category names:
+    // `len()` would accept six non-ASCII characters as if they were eighteen.
+    // Only create and change run this, never unlock, so tightening it cannot
+    // lock anyone out of an existing vault.
+    if password.chars().count() < MIN_MASTER_PASSWORD_CHARS {
         return Err(AppError::Validation(
             "master password must be at least 8 characters",
         ));
@@ -561,6 +567,38 @@ mod tests {
                 r.get(0)
             })
             .unwrap()
+    }
+
+    #[test]
+    fn the_master_password_minimum_counts_characters_not_bytes() {
+        // "at least 8 characters" has to mean characters. Six non-ASCII
+        // characters are 18 bytes, so a byte-length check would wave them
+        // through while the message promised eight.
+        let state = AppState::new(db::open_in_memory().unwrap());
+        let six_chars = "日本語パスワ";
+        assert_eq!(six_chars.chars().count(), 6);
+        assert!(six_chars.len() >= 8, "fixture must be long in bytes");
+        assert!(matches!(
+            create_vault_impl(&state, six_chars.into(), None),
+            Err(AppError::Validation(_))
+        ));
+
+        // Eight non-ASCII characters are still accepted.
+        let eight_chars = "日本語パスワード";
+        assert_eq!(eight_chars.chars().count(), 8);
+        assert!(create_vault_impl(&state, eight_chars.into(), None).is_ok());
+    }
+
+    #[test]
+    fn changing_to_a_short_multibyte_password_is_refused() {
+        let state = state_with_vault();
+        assert!(matches!(
+            change_master_password_impl(&state, PW_OLD.into(), "日本語パスワ".into()),
+            Err(AppError::Validation(_))
+        ));
+        // The old password still works, i.e. nothing was half-applied.
+        state.inner.lock().unwrap().key = None;
+        assert!(unlock_vault_impl(&state, PW_OLD.into()).is_ok());
     }
 
     #[test]

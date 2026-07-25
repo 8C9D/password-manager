@@ -21,7 +21,11 @@ import {
   THEME_OPTIONS,
   ThemeService,
 } from '../../core/services/theme.service';
-import { VaultService } from '../../core/services/vault.service';
+import {
+  masterPasswordLength,
+  MIN_MASTER_PASSWORD_CHARS,
+  VaultService,
+} from '../../core/services/vault.service';
 import { PasswordStrengthMeterComponent } from '../password-strength/password-strength-meter.component';
 
 interface Preset {
@@ -300,7 +304,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
   protected canChangePassword(): boolean {
     return (
       this.currentPw.length > 0 &&
-      this.newPw1.length >= 8 &&
+      masterPasswordLength(this.newPw1) >= MIN_MASTER_PASSWORD_CHARS &&
       this.newPw1 === this.newPw2
     );
   }

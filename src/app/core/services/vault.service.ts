@@ -83,12 +83,24 @@ export class VaultService {
   }
 }
 
+/** Backend minimum, counted the same way the backend counts it. */
+export const MIN_MASTER_PASSWORD_CHARS = 8;
+
 /**
- * Whether the create-vault form is valid: the master password is at least 8
- * characters and the confirmation matches it exactly.
+ * Length in characters, not UTF-16 code units. `"\u{1F600}".length` is 2, so a
+ * plain `.length` check calls four emoji an eight-character password while the
+ * backend (which counts `chars()`) calls it four and rejects it.
+ */
+export function masterPasswordLength(pw: string): number {
+  return [...pw].length;
+}
+
+/**
+ * Whether the create-vault form is valid: the master password is long enough
+ * and the confirmation matches it exactly.
  */
 export function canCreateVault(pw1: string, pw2: string): boolean {
-  return pw1.length >= 8 && pw1 === pw2;
+  return masterPasswordLength(pw1) >= MIN_MASTER_PASSWORD_CHARS && pw1 === pw2;
 }
 
 export interface ImportSummary {
