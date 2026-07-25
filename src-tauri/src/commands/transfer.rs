@@ -16,6 +16,51 @@ use super::vault::{read_vault_crypto_row, verify_password};
 const EXPORT_FORMAT: &str = "password-manager-export";
 const EXPORT_FORMAT_VERSION: u32 = 1;
 
+/// A `String` that wipes itself when dropped, serialized exactly like a plain
+/// string.
+///
+/// The serialized export buffer is already wrapped in `Zeroizing`, but the
+/// intermediate `ExportPayload` holds every password, note, and retired
+/// password in the vault. As plain `String`s those were dropped without being
+/// wiped, leaving vault plaintext in freed heap after every export - and adding
+/// password history multiplied how many secrets sit in that structure.
+#[derive(Clone, Default, PartialEq)]
+pub struct SecretString(Zeroizing<String>);
+
+impl SecretString {
+    fn new(s: String) -> Self {
+        Self(Zeroizing::new(s))
+    }
+}
+
+impl std::ops::Deref for SecretString {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Deliberately opaque: these values must never reach a log line or an error
+/// message just because something derived `Debug`.
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretString(<redacted>)")
+    }
+}
+
+impl Serialize for SecretString {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretString {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self::new(String::deserialize(deserializer)?))
+    }
+}
+
 /// On-disk export file: a cleartext header identifying the format and KDF
 /// inputs, plus the AES-256-GCM-encrypted payload.
 #[derive(Serialize, Deserialize)]
@@ -43,8 +88,8 @@ struct ExportEntry {
     title: String,
     username: String,
     url_or_app_name: String,
-    password: String,
-    notes: Option<String>,
+    password: SecretString,
+    notes: Option<SecretString>,
     category: Option<String>,
     created_at: String,
     updated_at: String,
@@ -73,7 +118,7 @@ struct ExportEntry {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExportHistoryItem {
-    password: String,
+    password: SecretString,
     changed_at: String,
 }
 
@@ -168,13 +213,15 @@ fn gather_payload(
 
     let mut entries = Vec::with_capacity(rows.len());
     for row in rows {
-        let password = String::from_utf8(crypto::decrypt(key, &row.enc_pw, &row.pw_nonce)?)
-            .map_err(|_| AppError::Crypto("password is not valid utf-8"))?;
+        let password = SecretString::new(
+            String::from_utf8(crypto::decrypt(key, &row.enc_pw, &row.pw_nonce)?)
+                .map_err(|_| AppError::Crypto("password is not valid utf-8"))?,
+        );
         let notes = match (row.enc_notes, row.notes_nonce) {
-            (Some(c), Some(n)) => Some(
+            (Some(c), Some(n)) => Some(SecretString::new(
                 String::from_utf8(crypto::decrypt(key, &c, &n)?)
                     .map_err(|_| AppError::Crypto("notes are not valid utf-8"))?,
-            ),
+            )),
             _ => None,
         };
         let totp = match (row.enc_totp, row.totp_nonce) {
@@ -195,9 +242,9 @@ fn gather_payload(
         for (ciphertext, nonce, changed_at) in history_rows {
             let plain = crypto::decrypt(key, &ciphertext, &nonce)?;
             password_history.push(ExportHistoryItem {
-                password: String::from_utf8(plain).map_err(|_| {
+                password: SecretString::new(String::from_utf8(plain).map_err(|_| {
                     AppError::Crypto("stored password is not valid utf-8")
-                })?,
+                })?),
                 changed_at,
             });
         }
@@ -393,9 +440,9 @@ fn build_csv(payload: &ExportPayload) -> String {
         let fields = [
             e.title.clone(),
             e.username.clone(),
-            e.password.clone(),
+            e.password.to_string(),
             e.url_or_app_name.clone(),
-            e.notes.clone().unwrap_or_default(),
+            e.notes.as_deref().unwrap_or_default().to_string(),
             e.category.clone().unwrap_or_default(),
             e.totp
                 .as_ref()
@@ -1353,6 +1400,37 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn secret_string_is_wire_compatible_with_a_plain_string() {
+        // The zeroizing wrapper must be invisible in the export format: files
+        // written before it existed have to stay readable, and files written
+        // now have to stay readable by anything expecting a JSON string.
+        let secret = SecretString::new("p@ssw0rd".into());
+        assert_eq!(
+            serde_json::to_string(&secret).unwrap(),
+            serde_json::to_string("p@ssw0rd").unwrap(),
+        );
+        let parsed: SecretString = serde_json::from_str("\"p@ssw0rd\"").unwrap();
+        assert_eq!(&*parsed, "p@ssw0rd");
+
+        // And inside the struct it actually lives in.
+        let item: ExportHistoryItem =
+            serde_json::from_str(r#"{"password":"old-one","changedAt":"2026-01-01T00:00:00Z"}"#)
+                .unwrap();
+        assert_eq!(&*item.password, "old-one");
+        assert_eq!(
+            serde_json::to_string(&item).unwrap(),
+            r#"{"password":"old-one","changedAt":"2026-01-01T00:00:00Z"}"#,
+        );
+    }
+
+    #[test]
+    fn secret_string_does_not_print_its_contents() {
+        let secret = SecretString::new("p@ssw0rd".into());
+        let shown = format!("{secret:?}");
+        assert!(!shown.contains("p@ssw0rd"), "secret leaked via Debug: {shown}");
     }
 
     #[test]
