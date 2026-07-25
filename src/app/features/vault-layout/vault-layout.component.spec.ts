@@ -35,6 +35,20 @@ describe('shortcutFor', () => {
     expect(shortcutFor('k', false, false)).toBeNull();
     expect(shortcutFor('Enter', true, false)).toBeNull();
   });
+
+  it('suppresses navigation shortcuts while a confirm dialog is open', () => {
+    // Otherwise Ctrl+N navigates the page out from under an open modal and
+    // "/" moves focus to the search box behind it.
+    expect(shortcutFor('n', true, false, true)).toBeNull();
+    expect(shortcutFor('k', true, false, true)).toBeNull();
+    expect(shortcutFor('/', false, false, true)).toBeNull();
+  });
+
+  it('keeps lock reachable even with a confirm dialog open', () => {
+    // Locking dismisses the dialog, so it stays coherent - and lock must never
+    // become unreachable.
+    expect(shortcutFor('l', true, false, true)).toBe('lock');
+  });
 });
 
 describe('isTextEntryTarget', () => {

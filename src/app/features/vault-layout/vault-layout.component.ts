@@ -10,6 +10,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink, RouterOutlet } from '@angular/router';
 
 import { ClipboardService } from '../../core/services/clipboard.service';
+import { ConfirmService } from '../../core/services/confirm.service';
 import { PasswordEntryService } from '../../core/services/password-entry.service';
 import { formatBackendError } from '../../core/services/tauri-invoke';
 import { VaultService } from '../../core/services/vault.service';
@@ -34,6 +35,7 @@ export class VaultLayoutComponent implements OnDestroy {
   private readonly router = inject(Router);
   protected readonly clipboard = inject(ClipboardService);
   protected readonly entries = inject(PasswordEntryService);
+  private readonly confirmSvc = inject(ConfirmService);
 
   protected readonly lockError = signal<string | null>(null);
   private readonly searchBox = viewChild<ElementRef<HTMLInputElement>>('searchBox');
@@ -43,6 +45,7 @@ export class VaultLayoutComponent implements OnDestroy {
       e.key,
       e.ctrlKey || e.metaKey,
       isTextEntryTarget(e.target),
+      this.confirmSvc.state().open,
     );
     if (action === null) return;
     e.preventDefault();
@@ -90,12 +93,21 @@ export type VaultShortcut = 'focus-search' | 'new-entry' | 'lock';
  * while the user types a slash into a URL or notes field. The modifier
  * combinations stay live everywhere, so Lock in particular is always one
  * chord away no matter which field has focus.
+ *
+ * `dialogOpen` suppresses the two navigating shortcuts: a modal is meant to be
+ * answered, and moving the page (or focus) out from under it strands the
+ * dialog over an unrelated screen. Lock survives because locking dismisses the
+ * dialog on its way out, and must never become unreachable.
  */
 export function shortcutFor(
   key: string,
   modifier: boolean,
   editing: boolean,
+  dialogOpen = false,
 ): VaultShortcut | null {
+  if (dialogOpen) {
+    return modifier && key.toLowerCase() === 'l' ? 'lock' : null;
+  }
   if (modifier) {
     switch (key.toLowerCase()) {
       case 'k':
