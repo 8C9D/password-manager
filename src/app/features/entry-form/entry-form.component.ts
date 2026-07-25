@@ -1,6 +1,8 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
+import { Component, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { combineLatest } from 'rxjs';
 
 import { Category } from '../../core/models/category.model';
 import { EntryInput } from '../../core/models/entry.model';
@@ -35,7 +37,7 @@ function parseId(raw: string | null): number | null {
   templateUrl: './entry-form.component.html',
   styleUrl: './entry-form.component.css',
 })
-export class EntryFormComponent implements OnInit {
+export class EntryFormComponent {
   private readonly entries = inject(PasswordEntryService);
   private readonly categoriesSvc = inject(CategoryService);
   private readonly router = inject(Router);
@@ -71,9 +73,52 @@ export class EntryFormComponent implements OnInit {
     return id ? ['/vault', id] : ['/vault'];
   };
 
-  async ngOnInit(): Promise<void> {
-    const idParam = this.route.snapshot.paramMap.get('id');
-    const id = idParam ? Number(idParam) : null;
+  // Bumped on every load so a slower in-flight load can tell it was superseded.
+  private loadToken = 0;
+
+  constructor() {
+    // The route is watched rather than read once from a snapshot: Angular
+    // reuses this component across navigations that keep the same route config
+    // (/vault/new?duplicate=5 -> /vault/new via the new-entry shortcut, or one
+    // edit URL to another), and ngOnInit does not run again. Reading the
+    // snapshot once left the previous entry's data in the form, so saving what
+    // looked like a blank new entry silently wrote another copy of it.
+    combineLatest([this.route.paramMap, this.route.queryParamMap])
+      .pipe(takeUntilDestroyed())
+      .subscribe(([params, queryParams]) => {
+        void this.load(params.get('id'), queryParams.get('duplicate'));
+      });
+  }
+
+  /** Return every field to its pristine state before a (re)load. */
+  private resetForm(): void {
+    this.title = '';
+    this.username = '';
+    this.urlOrAppName = '';
+    this.password = '';
+    this.notes = '';
+    this.categoryId = null;
+    this.totpSecret = '';
+    this.removeTotp = false;
+    this.hasExistingTotp = false;
+    this.favorite = false;
+    this.tagsInput = '';
+    this.passwordExpiryDays = '';
+    this.errorMsg.set(null);
+    this.showPassword.set(false);
+    this.showGenerator.set(false);
+    this.titleTouched.set(false);
+    this.passwordTouched.set(false);
+    this.editingId.set(null);
+    this.duplicating.set(false);
+  }
+
+  private async load(idParam: string | null, duplicateParam: string | null): Promise<void> {
+    const token = ++this.loadToken;
+    this.resetForm();
+    this.loading.set(true);
+
+    const id = idParam === null ? null : Number(idParam);
     if (id !== null && (!Number.isFinite(id) || id <= 0)) {
       // A garbage edit URL must not fall through to an empty form whose
       // submit would then call update() with a nonsense id.
@@ -86,14 +131,16 @@ export class EntryFormComponent implements OnInit {
     // "Duplicate" prefills a brand-new entry from an existing one, so the id is
     // a source to copy from, never a row to overwrite: editingId stays null and
     // submit takes the create path.
-    const sourceId = id === null ? parseId(this.route.snapshot.queryParamMap.get('duplicate')) : null;
+    const sourceId = id === null ? parseId(duplicateParam) : null;
 
     try {
       await this.categoriesSvc.list();
+      if (token !== this.loadToken) return;
       this.categories.set(this.categoriesSvc.categories());
       const loadFrom = id ?? sourceId;
       if (loadFrom !== null) {
         const full = await this.entries.get(loadFrom);
+        if (token !== this.loadToken) return;
         this.title = sourceId !== null ? `${full.title} (copy)` : full.title;
         this.username = full.username;
         this.urlOrAppName = full.urlOrAppName;
@@ -109,9 +156,10 @@ export class EntryFormComponent implements OnInit {
         this.duplicating.set(sourceId !== null);
       }
     } catch (e) {
+      if (token !== this.loadToken) return;
       this.errorMsg.set(formatBackendError(e));
     } finally {
-      this.loading.set(false);
+      if (token === this.loadToken) this.loading.set(false);
     }
   }
 
