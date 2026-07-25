@@ -667,6 +667,122 @@ pub fn set_favorite(
     set_favorite_impl(&state, id, favorite)
 }
 
+// --- Bulk actions ---
+
+/// Upper bound on one bulk request. Well above any realistic selection, and it
+/// keeps a hand-crafted call from building an enormous statement.
+pub(crate) const MAX_BULK_IDS: usize = 1000;
+
+/// Validate a bulk id list: non-empty, within the cap, and de-duplicated so a
+/// repeated id cannot inflate the reported count.
+pub(crate) fn normalize_bulk_ids(ids: &[i64]) -> Result<Vec<i64>, AppError> {
+    if ids.is_empty() {
+        return Err(AppError::Validation("no entries selected"));
+    }
+    if ids.len() > MAX_BULK_IDS {
+        return Err(AppError::Validation("too many entries in one request"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    Ok(ids.iter().copied().filter(|id| seen.insert(*id)).collect())
+}
+
+/// Apply one metadata UPDATE to every live entry in `ids`, in a single
+/// transaction, and report how many rows it actually changed.
+///
+/// The count is what the caller reports to the user, so it comes from the
+/// database rather than from the length of the request: ids that name a
+/// trashed or already-deleted entry match nothing and must not be counted.
+fn bulk_update(
+    state: &AppState,
+    ids: &[i64],
+    sql: &str,
+    bind: impl Fn(&mut rusqlite::Statement<'_>, i64) -> rusqlite::Result<usize>,
+) -> Result<usize, AppError> {
+    let ids = normalize_bulk_ids(ids)?;
+    with_authorized(state, |s| {
+        let tx = s.conn.transaction()?;
+        let mut changed = 0usize;
+        {
+            let mut stmt = tx.prepare(sql)?;
+            for id in ids {
+                changed += bind(&mut stmt, id)?;
+            }
+        }
+        tx.commit()?;
+        Ok(changed)
+    })
+}
+
+/// Move several entries into a category at once (or out of one, with `None`).
+///
+/// This writes only `category_id`, so unlike routing the change through
+/// `update_entry` it never decrypts or re-encrypts a password - and therefore
+/// cannot disturb `password_changed_at` or record spurious password history.
+fn set_entries_category_impl(
+    state: &AppState,
+    ids: &[i64],
+    category_id: Option<i64>,
+) -> Result<usize, AppError> {
+    let now = now_iso8601();
+    bulk_update(
+        state,
+        ids,
+        "UPDATE password_entries SET category_id = ?1, updated_at = ?2
+         WHERE id = ?3 AND deleted_at IS NULL",
+        move |stmt, id| stmt.execute(rusqlite::params![category_id, now, id]),
+    )
+}
+
+fn set_entries_favorite_impl(
+    state: &AppState,
+    ids: &[i64],
+    favorite: bool,
+) -> Result<usize, AppError> {
+    bulk_update(
+        state,
+        ids,
+        "UPDATE password_entries SET is_favorite = ?1
+         WHERE id = ?2 AND deleted_at IS NULL",
+        move |stmt, id| stmt.execute(rusqlite::params![favorite, id]),
+    )
+}
+
+/// Move several entries to the trash at once. Like `delete_entry` this is a
+/// soft delete; nothing here destroys data.
+fn delete_entries_impl(state: &AppState, ids: &[i64]) -> Result<usize, AppError> {
+    let now = now_iso8601();
+    bulk_update(
+        state,
+        ids,
+        "UPDATE password_entries SET deleted_at = ?1
+         WHERE id = ?2 AND deleted_at IS NULL",
+        move |stmt, id| stmt.execute(rusqlite::params![now, id]),
+    )
+}
+
+#[tauri::command]
+pub fn set_entries_category(
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+    category_id: Option<i64>,
+) -> Result<usize, AppError> {
+    set_entries_category_impl(&state, &ids, category_id)
+}
+
+#[tauri::command]
+pub fn set_entries_favorite(
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+    favorite: bool,
+) -> Result<usize, AppError> {
+    set_entries_favorite_impl(&state, &ids, favorite)
+}
+
+#[tauri::command]
+pub fn delete_entries(state: State<'_, AppState>, ids: Vec<i64>) -> Result<usize, AppError> {
+    delete_entries_impl(&state, &ids)
+}
+
 /// Create an entry from another module's tests. The `_impl` functions are
 /// private to this module, but the history and transfer tests need to drive
 /// real entry writes rather than hand-rolled INSERTs that skip this path.
@@ -1479,5 +1595,186 @@ mod tests {
         let full = get_entry_impl(&state, id).unwrap();
         assert!(full.favorite);
         assert_eq!(full.tags, vec!["banking".to_string()]);
+    }
+
+    // --- Bulk actions ---
+
+    fn three_entries(state: &AppState) -> Vec<i64> {
+        ["Alpha", "Beta", "Gamma"]
+            .into_iter()
+            .map(|title| {
+                create_entry_impl(
+                    state,
+                    EntryInput {
+                        title: title.into(),
+                        ..sample_input()
+                    },
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    fn category(state: &AppState, name: &str) -> i64 {
+        let guard = state.inner.lock().unwrap();
+        guard
+            .conn
+            .execute(
+                "INSERT INTO categories (name, created_at, updated_at)
+                 VALUES (?1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                [name],
+            )
+            .unwrap();
+        guard.conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn bulk_category_move_reports_and_applies_to_every_selected_entry() {
+        let state = unlocked_state();
+        let ids = three_entries(&state);
+        let work = category(&state, "Work");
+
+        let moved = set_entries_category_impl(&state, &ids[..2], Some(work)).unwrap();
+        assert_eq!(moved, 2);
+        assert_eq!(get_entry_impl(&state, ids[0]).unwrap().category_id, Some(work));
+        assert_eq!(get_entry_impl(&state, ids[1]).unwrap().category_id, Some(work));
+        assert_eq!(get_entry_impl(&state, ids[2]).unwrap().category_id, None);
+
+        // None takes them back out of the category.
+        assert_eq!(set_entries_category_impl(&state, &ids[..2], None).unwrap(), 2);
+        assert_eq!(get_entry_impl(&state, ids[0]).unwrap().category_id, None);
+    }
+
+    #[test]
+    fn a_bulk_move_does_not_touch_the_password_or_its_history() {
+        // Routing this through update_entry would decrypt and re-encrypt every
+        // password, which is where password_changed_at and password history are
+        // decided. A metadata-only write must leave both alone.
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        let before = get_entry_impl(&state, id).unwrap();
+        let changed_at: String = state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row(
+                "SELECT password_changed_at FROM password_entries WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        let work = category(&state, "Work");
+        set_entries_category_impl(&state, &[id], Some(work)).unwrap();
+
+        let after = get_entry_impl(&state, id).unwrap();
+        assert_eq!(after.password, before.password);
+        let still: String = state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row(
+                "SELECT password_changed_at FROM password_entries WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(still, changed_at, "a metadata move must not age the password");
+        let history: i64 = state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row("SELECT COUNT(*) FROM password_history", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(history, 0, "a metadata move must not record a rotation");
+    }
+
+    #[test]
+    fn bulk_favorite_and_bulk_trash_apply_to_the_selection() {
+        let state = unlocked_state();
+        let ids = three_entries(&state);
+
+        assert_eq!(set_entries_favorite_impl(&state, &ids, true).unwrap(), 3);
+        assert!(list_entries_impl(&state).unwrap().iter().all(|e| e.favorite));
+        assert_eq!(set_entries_favorite_impl(&state, &ids[..1], false).unwrap(), 1);
+
+        assert_eq!(delete_entries_impl(&state, &ids[..2]).unwrap(), 2);
+        let live = list_entries_impl(&state).unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].id, ids[2]);
+        // Soft delete: the rows are in the trash, not gone.
+        assert_eq!(list_deleted_entries_impl(&state).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn the_reported_count_comes_from_the_rows_actually_changed() {
+        // An id that names nothing, or names something already in the trash,
+        // must not be counted - the number goes straight to the user as "moved
+        // N entries".
+        let state = unlocked_state();
+        let ids = three_entries(&state);
+        delete_entries_impl(&state, &ids[..1]).unwrap();
+
+        let work = category(&state, "Work");
+        let moved = set_entries_category_impl(
+            &state,
+            &[ids[0], ids[1], 9999],
+            Some(work),
+        )
+        .unwrap();
+        assert_eq!(moved, 1, "only the one live entry was moved");
+
+        // A repeated id is one entry, not two.
+        assert_eq!(
+            set_entries_favorite_impl(&state, &[ids[2], ids[2], ids[2]], true).unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_empty_or_oversized_selection_is_refused() {
+        let state = unlocked_state();
+        assert!(matches!(
+            set_entries_favorite_impl(&state, &[], true),
+            Err(AppError::Validation(_))
+        ));
+        let too_many: Vec<i64> = (1..=(MAX_BULK_IDS as i64 + 1)).collect();
+        assert!(matches!(
+            delete_entries_impl(&state, &too_many),
+            Err(AppError::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn a_failed_bulk_write_leaves_nothing_half_applied() {
+        // One transaction: a category id that violates the foreign key must
+        // roll the whole selection back rather than move the first few.
+        let state = unlocked_state();
+        let ids = three_entries(&state);
+        let err = set_entries_category_impl(&state, &ids, Some(999_999));
+        assert!(err.is_err(), "a dangling category must be refused");
+        for id in ids {
+            assert_eq!(get_entry_impl(&state, id).unwrap().category_id, None);
+        }
+    }
+
+    #[test]
+    fn bulk_actions_require_an_unlocked_vault() {
+        let state = locked_state();
+        assert!(matches!(
+            set_entries_favorite_impl(&state, &[1], true),
+            Err(AppError::Locked)
+        ));
+        assert!(matches!(
+            delete_entries_impl(&state, &[1]),
+            Err(AppError::Locked)
+        ));
+        assert!(matches!(
+            set_entries_category_impl(&state, &[1], None),
+            Err(AppError::Locked)
+        ));
     }
 }

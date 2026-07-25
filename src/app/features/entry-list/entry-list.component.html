@@ -1,4 +1,9 @@
 <div class="list-container">
+  <!-- Outside the branches below: a bulk action can empty the visible list, and
+       that is exactly when the user most needs to be told what just happened. -->
+  @if (bulkNotice()) {
+    <p class="bulk-notice" role="status">{{ bulkNotice() }}</p>
+  }
   @if (loading()) {
     <p class="muted">Loading…</p>
   } @else if (errorMsg()) {
@@ -24,10 +29,89 @@
           <option value="recently-created">Recently created</option>
         </select>
       </label>
+      <button
+        type="button"
+        class="btn small select-toggle"
+        [attr.aria-pressed]="selecting()"
+        (click)="toggleSelecting()"
+      >
+        {{ selecting() ? 'Done' : 'Select' }}
+      </button>
     </div>
+
+    @if (selecting()) {
+      <div class="bulk-bar" role="group" aria-label="Actions for selected entries">
+        <label class="select-all">
+          <input
+            type="checkbox"
+            name="selectAll"
+            [checked]="allSelected()"
+            (change)="toggleAll()"
+          />
+          {{ selectedIds().length }} selected
+        </label>
+        <div class="bulk-actions">
+          <label class="move">
+            <select
+              name="moveTarget"
+              aria-label="Category to move the selected entries into"
+              [(ngModel)]="moveTarget"
+              [disabled]="selectedIds().length === 0 || bulkBusy()"
+            >
+              <option [ngValue]="null">(uncategorized)</option>
+              @for (c of categories.categories(); track c.id) {
+                <option [ngValue]="c.id">{{ c.name }}</option>
+              }
+            </select>
+          </label>
+          <button
+            type="button"
+            class="btn small"
+            [disabled]="selectedIds().length === 0 || bulkBusy()"
+            (click)="moveSelected()"
+          >
+            Move
+          </button>
+          <button
+            type="button"
+            class="btn small"
+            [disabled]="selectedIds().length === 0 || bulkBusy()"
+            (click)="favoriteSelected(true)"
+          >
+            ★ Star
+          </button>
+          <button
+            type="button"
+            class="btn small"
+            [disabled]="selectedIds().length === 0 || bulkBusy()"
+            (click)="favoriteSelected(false)"
+          >
+            Unstar
+          </button>
+          <button
+            type="button"
+            class="btn small danger"
+            [disabled]="selectedIds().length === 0 || bulkBusy()"
+            (click)="trashSelected()"
+          >
+            Move to trash
+          </button>
+        </div>
+      </div>
+    }
+
     <ul>
       @for (entry of visible(); track entry.id) {
-        <li>
+        <li [class.row-selected]="selecting() && isSelected(entry.id)">
+          @if (selecting()) {
+            <input
+              type="checkbox"
+              class="pick"
+              [attr.aria-label]="'Select ' + entry.title"
+              [checked]="isSelected(entry.id)"
+              (change)="toggle(entry.id)"
+            />
+          }
           <a
             [routerLink]="['/vault', entry.id]"
             routerLinkActive="selected"

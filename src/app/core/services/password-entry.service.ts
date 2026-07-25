@@ -83,6 +83,29 @@ export class PasswordEntryService {
     await this.list();
   }
 
+  /**
+   * Bulk actions return how many rows the backend actually changed, which is
+   * not always the size of the selection: an entry someone else already
+   * trashed matches nothing.
+   */
+  async setEntriesCategory(ids: number[], categoryId: number | null): Promise<number> {
+    const moved = await call<number>('set_entries_category', { ids, categoryId });
+    await this.list();
+    return moved;
+  }
+
+  async setEntriesFavorite(ids: number[], favorite: boolean): Promise<number> {
+    const changed = await call<number>('set_entries_favorite', { ids, favorite });
+    await this.list();
+    return changed;
+  }
+
+  async removeEntries(ids: number[]): Promise<number> {
+    const trashed = await call<number>('delete_entries', { ids });
+    await this.list();
+    return trashed;
+  }
+
   clear(): void {
     this.entries.set([]);
     this.searchQuery.set('');

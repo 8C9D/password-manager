@@ -81,3 +81,70 @@ a.selected .sub {
   color: var(--favorite);
   font-size: 0.85em;
 }
+.sort-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.sort-bar .sort {
+  flex: 1;
+}
+/* The selection toggle reads as pressed, matching aria-pressed. */
+.select-toggle[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+.bulk-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.select-all {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+.bulk-actions .move {
+  flex: 1 1 8rem;
+}
+.bulk-actions select {
+  width: 100%;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+.bulk-notice {
+  margin: 0;
+  padding: 0.35rem 1rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+li {
+  display: flex;
+  align-items: center;
+}
+li > a {
+  flex: 1;
+  min-width: 0;
+}
+.pick {
+  margin-left: 1rem;
+}
+li.row-selected {
+  background: var(--accent-soft);
+}
