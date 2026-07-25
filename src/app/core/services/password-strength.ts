@@ -95,6 +95,27 @@ function effectiveLength(pw: string): number {
   return len;
 }
 
+/**
+ * Band a number of bits into a score.
+ *
+ * Split out so a secret whose entropy is known exactly (the passphrase
+ * generator counts its own choices) is described with the same words as one the
+ * meter can only estimate. Two sets of thresholds would let the same secret read
+ * "Fair" in one place and "Good" in another.
+ */
+export function scoreForBits(bits: number): StrengthScore {
+  if (bits < 20) return 0;
+  if (bits < 36) return 1;
+  if (bits < 52) return 2;
+  if (bits < 68) return 3;
+  return 4;
+}
+
+export function strengthForBits(bits: number): PasswordStrength {
+  const score = scoreForBits(bits);
+  return { score, label: STRENGTH_LABELS[score] };
+}
+
 export function scorePassword(pw: string): PasswordStrength {
   const finish = (score: StrengthScore): PasswordStrength => ({
     score,
@@ -118,10 +139,5 @@ export function scorePassword(pw: string): PasswordStrength {
   }
 
   const bits = effectiveLength(pw) * Math.log2(poolSize(pw));
-
-  if (bits < 20) return finish(0);
-  if (bits < 36) return finish(1);
-  if (bits < 52) return finish(2);
-  if (bits < 68) return finish(3);
-  return finish(4);
+  return finish(scoreForBits(bits));
 }

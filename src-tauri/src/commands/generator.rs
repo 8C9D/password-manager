@@ -1,5 +1,5 @@
 use rand::{rngs::OsRng, Rng};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 
@@ -104,6 +104,104 @@ pub fn generate(opts: &GeneratorOptions) -> Result<String, AppError> {
 #[tauri::command]
 pub fn generate_password(options: GeneratorOptions) -> Result<String, AppError> {
     generate(&options)
+}
+
+// --- Passphrase generation ---
+
+/// Bundled wordlist, 4096 entries so each word contributes exactly 12 bits.
+///
+/// Built from the system dictionary, restricted to 4-6 lowercase ASCII letters
+/// and de-duplicated against simple inflections. It leans on an unabridged
+/// dictionary, so a few entries are obscure; that costs memorability but not
+/// strength, since the entropy comes from the size of the list rather than from
+/// how familiar any particular word is.
+const WORDLIST: &str = include_str!("wordlist.txt");
+
+pub(crate) const MIN_WORDS: usize = 3;
+pub(crate) const MAX_WORDS: usize = 12;
+/// Long enough for " - " style separators, short enough that the field cannot
+/// become a second password.
+pub(crate) const MAX_SEPARATOR_CHARS: usize = 4;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PassphraseOptions {
+    pub word_count: usize,
+    /// Text placed between words. Empty is allowed (one run-on phrase).
+    pub separator: String,
+    pub capitalize: bool,
+    /// Append a digit to one randomly chosen word, for sites that demand one.
+    pub include_number: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedPassphrase {
+    pub passphrase: String,
+    /// Exact entropy of the choices made, not an estimate from the text. A
+    /// character-based strength model reads a passphrase as a long lowercase
+    /// string and badly misjudges it in both directions.
+    pub entropy_bits: f64,
+}
+
+fn words() -> Vec<&'static str> {
+    WORDLIST.lines().filter(|w| !w.is_empty()).collect()
+}
+
+pub(crate) fn build_passphrase(
+    opts: &PassphraseOptions,
+) -> Result<GeneratedPassphrase, AppError> {
+    if opts.word_count < MIN_WORDS || opts.word_count > MAX_WORDS {
+        return Err(AppError::Validation("passphrase must be 3 to 12 words"));
+    }
+    if opts.separator.chars().count() > MAX_SEPARATOR_CHARS {
+        return Err(AppError::Validation(
+            "separator must be 4 characters or fewer",
+        ));
+    }
+    let pool = words();
+    if pool.is_empty() {
+        return Err(AppError::Internal("wordlist is empty".into()));
+    }
+    let mut rng = OsRng;
+
+    let mut chosen: Vec<String> = (0..opts.word_count)
+        .map(|_| {
+            let w = pool[rng.gen_range(0..pool.len())];
+            if opts.capitalize {
+                let mut c = w.chars();
+                match c.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + c.as_str(),
+                    None => String::new(),
+                }
+            } else {
+                w.to_string()
+            }
+        })
+        .collect();
+
+    // log2(pool)^word_count, computed as word_count * log2(pool).
+    let mut entropy_bits = opts.word_count as f64 * (pool.len() as f64).log2();
+
+    if opts.include_number {
+        let target = rng.gen_range(0..chosen.len());
+        let digit = rng.gen_range(0..10u32);
+        chosen[target].push_str(&digit.to_string());
+        // Both the digit and which word carries it are random choices.
+        entropy_bits += 10f64.log2() + (chosen.len() as f64).log2();
+    }
+
+    Ok(GeneratedPassphrase {
+        passphrase: chosen.join(&opts.separator),
+        entropy_bits,
+    })
+}
+
+#[tauri::command]
+pub fn generate_passphrase(
+    options: PassphraseOptions,
+) -> Result<GeneratedPassphrase, AppError> {
+    build_passphrase(&options)
 }
 
 #[cfg(test)]
@@ -264,6 +362,167 @@ mod tests {
         let pool = build_pool(&opts).unwrap();
         for c in AMBIGUOUS {
             assert!(!pool.contains(c));
+        }
+    }
+
+    // --- Passphrase ---
+
+    fn default_phrase_opts() -> PassphraseOptions {
+        PassphraseOptions {
+            word_count: 5,
+            separator: "-".into(),
+            capitalize: false,
+            include_number: false,
+        }
+    }
+
+    #[test]
+    fn the_wordlist_is_the_size_its_entropy_claim_depends_on() {
+        // Every word is asserted to be 12 bits, which is only true at 4096
+        // entries; a duplicate or a stray blank line would silently overstate
+        // the strength shown to the user.
+        let pool = words();
+        assert_eq!(pool.len(), 4096);
+        let unique: std::collections::HashSet<&str> = pool.iter().copied().collect();
+        assert_eq!(unique.len(), pool.len(), "wordlist has duplicates");
+        for w in &pool {
+            assert!(
+                w.chars().all(|c| c.is_ascii_lowercase()),
+                "unexpected characters in {w:?}"
+            );
+            assert!((4..=6).contains(&w.len()), "unexpected length in {w:?}");
+        }
+    }
+
+    #[test]
+    fn passphrase_has_the_requested_number_of_words() {
+        for count in [MIN_WORDS, 5, MAX_WORDS] {
+            let opts = PassphraseOptions {
+                word_count: count,
+                ..default_phrase_opts()
+            };
+            let out = build_passphrase(&opts).unwrap();
+            assert_eq!(out.passphrase.split('-').count(), count);
+        }
+    }
+
+    #[test]
+    fn word_count_outside_the_supported_range_is_refused() {
+        for count in [0, MIN_WORDS - 1, MAX_WORDS + 1, usize::MAX] {
+            let opts = PassphraseOptions {
+                word_count: count,
+                ..default_phrase_opts()
+            };
+            assert!(matches!(
+                build_passphrase(&opts),
+                Err(AppError::Validation(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn an_over_long_separator_is_refused() {
+        let opts = PassphraseOptions {
+            separator: "-----".into(),
+            ..default_phrase_opts()
+        };
+        assert!(matches!(
+            build_passphrase(&opts),
+            Err(AppError::Validation(_))
+        ));
+        // Exactly at the limit is fine, counted in characters like every other
+        // length bound in this app.
+        let ok = PassphraseOptions {
+            separator: "😀😀😀😀".into(),
+            ..default_phrase_opts()
+        };
+        assert!(build_passphrase(&ok).is_ok());
+    }
+
+    #[test]
+    fn an_empty_separator_runs_the_words_together() {
+        let opts = PassphraseOptions {
+            separator: String::new(),
+            ..default_phrase_opts()
+        };
+        let out = build_passphrase(&opts).unwrap();
+        assert!(out.passphrase.chars().all(|c| c.is_ascii_lowercase()));
+    }
+
+    #[test]
+    fn capitalize_uppercases_the_first_letter_of_every_word() {
+        let opts = PassphraseOptions {
+            capitalize: true,
+            ..default_phrase_opts()
+        };
+        let out = build_passphrase(&opts).unwrap();
+        for word in out.passphrase.split('-') {
+            let first = word.chars().next().unwrap();
+            assert!(first.is_ascii_uppercase(), "not capitalized: {word:?}");
+        }
+    }
+
+    #[test]
+    fn a_requested_digit_lands_on_exactly_one_word() {
+        let opts = PassphraseOptions {
+            include_number: true,
+            ..default_phrase_opts()
+        };
+        for _ in 0..20 {
+            let out = build_passphrase(&opts).unwrap();
+            let with_digit = out
+                .passphrase
+                .split('-')
+                .filter(|w| w.chars().any(|c| c.is_ascii_digit()))
+                .count();
+            assert_eq!(with_digit, 1, "in {:?}", out.passphrase);
+            // The word count is unchanged; the digit rides along on a word.
+            assert_eq!(out.passphrase.split('-').count(), 5);
+        }
+    }
+
+    #[test]
+    fn reported_entropy_matches_the_choices_actually_made() {
+        // 4096 words is 12 bits each.
+        let out = build_passphrase(&default_phrase_opts()).unwrap();
+        assert!((out.entropy_bits - 60.0).abs() < 1e-9, "got {}", out.entropy_bits);
+
+        // Capitalizing every word adds no choice, so it must not add bits.
+        let capitalized = build_passphrase(&PassphraseOptions {
+            capitalize: true,
+            ..default_phrase_opts()
+        })
+        .unwrap();
+        assert!((capitalized.entropy_bits - 60.0).abs() < 1e-9);
+
+        // A digit adds its own value plus which word carries it.
+        let numbered = build_passphrase(&PassphraseOptions {
+            include_number: true,
+            ..default_phrase_opts()
+        })
+        .unwrap();
+        let expected = 60.0 + 10f64.log2() + 5f64.log2();
+        assert!((numbered.entropy_bits - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn two_calls_yield_different_passphrases() {
+        let opts = default_phrase_opts();
+        let a = build_passphrase(&opts).unwrap().passphrase;
+        let b = build_passphrase(&opts).unwrap().passphrase;
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn generated_words_all_come_from_the_bundled_list() {
+        let pool: std::collections::HashSet<&str> = words().into_iter().collect();
+        let out = build_passphrase(&PassphraseOptions {
+            word_count: MAX_WORDS,
+            ..default_phrase_opts()
+        })
+        .unwrap();
+        for w in out.passphrase.split('-') {
+            assert!(pool.contains(w), "{w:?} is not in the wordlist");
         }
     }
 }

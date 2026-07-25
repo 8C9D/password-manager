@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { scorePassword, STRENGTH_LABELS } from './password-strength';
+import {
+  scoreForBits,
+  scorePassword,
+  strengthForBits,
+  STRENGTH_LABELS,
+} from './password-strength';
 
 describe('scorePassword', () => {
   it('scores the empty password 0', () => {
@@ -55,5 +60,27 @@ describe('scorePassword', () => {
       const r = scorePassword(pw);
       expect(r.label).toBe(STRENGTH_LABELS[r.score]);
     }
+  });
+});
+
+describe('scoreForBits', () => {
+  it('bands bits the same way the character estimate does', () => {
+    // The passphrase generator knows its entropy exactly and reuses this
+    // banding, so the two paths must never describe the same secret
+    // differently.
+    expect(scoreForBits(0)).toBe(0);
+    expect(scoreForBits(19.9)).toBe(0);
+    expect(scoreForBits(20)).toBe(1);
+    expect(scoreForBits(35.9)).toBe(1);
+    expect(scoreForBits(36)).toBe(2);
+    expect(scoreForBits(52)).toBe(3);
+    expect(scoreForBits(68)).toBe(4);
+    expect(scoreForBits(1000)).toBe(4);
+  });
+
+  it('labels bits with the shared label table', () => {
+    expect(strengthForBits(60).label).toBe(STRENGTH_LABELS[3]);
+    // A 5-word passphrase from a 4096-word list is 60 bits.
+    expect(strengthForBits(60).score).toBe(3);
   });
 });

@@ -53,6 +53,7 @@ pub fn run() {
             commands::categories::update_category,
             commands::categories::delete_category,
             commands::generator::generate_password,
+            commands::generator::generate_passphrase,
             commands::settings::get_settings,
             commands::settings::get_settings_bounds,
             commands::settings::update_settings,
