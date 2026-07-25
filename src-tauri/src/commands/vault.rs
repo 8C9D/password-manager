@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 use tauri::State;
 use zeroize::Zeroizing;
@@ -28,6 +29,9 @@ fn vault_row_exists(conn: &rusqlite::Connection) -> Result<bool, AppError> {
 
 fn vault_status_impl(state: &AppState) -> Result<VaultStatus, AppError> {
     with_state(state, |s| {
+        // `.optional()?`, not `.ok()`: collapsing a real database failure into
+        // "no vault" would greet the user with the create-a-vault screen while
+        // their vault sits there unreadable.
         let vault_name: Option<String> = s
             .conn
             .query_row(
@@ -35,7 +39,7 @@ fn vault_status_impl(state: &AppState) -> Result<VaultStatus, AppError> {
                 [],
                 |r| r.get(0),
             )
-            .ok();
+            .optional()?;
         Ok(VaultStatus {
             exists: vault_name.is_some(),
             unlocked: s.key.is_some(),
@@ -819,6 +823,27 @@ mod tests {
         let json2 = crypto::decrypt(&reunlocked_key, &enc, &nonce).unwrap();
         let config2: TotpConfig = serde_json::from_slice(&json2).unwrap();
         assert_eq!(config2.secret_base32, RFC_SECRET);
+    }
+
+    #[test]
+    fn status_surfaces_a_database_error_rather_than_reporting_no_vault() {
+        let state = state_with_vault();
+        assert!(vault_status_impl(&state).unwrap().exists);
+
+        // With the table gone, query_row errors instead of returning "no rows".
+        // Reporting exists: false here would send the user to the create-vault
+        // screen as though their data had never existed.
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute("DROP TABLE vault_metadata", [])
+            .unwrap();
+        assert!(matches!(
+            vault_status_impl(&state),
+            Err(AppError::Database(_))
+        ));
     }
 
     #[test]

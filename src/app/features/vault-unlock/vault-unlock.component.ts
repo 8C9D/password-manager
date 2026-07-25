@@ -39,7 +39,21 @@ export class VaultUnlockComponent {
       }
       this.mode.set(status.exists ? 'unlock' : 'create');
     } catch (e) {
+      // Stays in 'unknown' mode: a status read that failed says nothing about
+      // whether a vault exists, and guessing 'create' here would invite the
+      // user to make a second vault over an unreadable one.
       this.errorMsg.set(formatBackendError(e));
+    }
+  }
+
+  protected async onRetry(): Promise<void> {
+    if (this.busy()) return;
+    this.busy.set(true);
+    this.errorMsg.set(null);
+    try {
+      await this.init();
+    } finally {
+      this.busy.set(false);
     }
   }
 

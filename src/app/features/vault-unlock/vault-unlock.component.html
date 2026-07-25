@@ -3,7 +3,17 @@
     <h1>Password Manager</h1>
     @switch (mode()) {
       @case ('unknown') {
-        <p class="muted">Checking vault…</p>
+        @if (errorMsg()) {
+          <p class="warn">{{ errorMsg() }}</p>
+          <p class="muted small">
+            The vault could not be read. Your data has not been changed.
+          </p>
+          <button type="button" class="btn primary" [disabled]="busy()" (click)="onRetry()">
+            {{ busy() ? 'Retrying…' : 'Try again' }}
+          </button>
+        } @else {
+          <p class="muted">Checking vault…</p>
+        }
       }
       @case ('create') {
         <p>Set a master password to create your vault. You'll need it every time you unlock.</p>
