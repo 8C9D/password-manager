@@ -36,6 +36,7 @@ export type TauriCommand =
   | 'delete_category'
   | 'generate_password'
   | 'get_settings'
+  | 'get_settings_bounds'
   | 'update_settings'
   | 'copy_to_clipboard'
   | 'export_vault'

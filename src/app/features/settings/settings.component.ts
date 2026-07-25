@@ -11,7 +11,10 @@ import { RouterLink } from '@angular/router';
 import { open, save } from '@tauri-apps/plugin-dialog';
 
 import { ConfirmService } from '../../core/services/confirm.service';
-import { SettingsService } from '../../core/services/settings.service';
+import {
+  SettingsService,
+  validateSettingsForm,
+} from '../../core/services/settings.service';
 import { formatBackendError } from '../../core/services/tauri-invoke';
 import { VaultService } from '../../core/services/vault.service';
 import { PasswordStrengthMeterComponent } from '../password-strength/password-strength-meter.component';
@@ -85,8 +88,13 @@ export class SettingsComponent implements OnInit, OnDestroy {
   protected readonly pwErrorMsg = signal<string | null>(null);
   protected readonly pwSavedMsg = signal<string | null>(null);
 
+  protected readonly bounds = this.settings.bounds;
+
   async ngOnInit(): Promise<void> {
     try {
+      // Bounds first: the form renders its min/max from them, and they are
+      // constants the backend can always answer for.
+      await this.settings.loadBounds();
       const s = await this.settings.load();
       this.autoLockSecs = s.autoLockSecs;
       this.clipboardClearSecs = s.clipboardClearSecs;
@@ -103,30 +111,21 @@ export class SettingsComponent implements OnInit, OnDestroy {
     this.busy.set(true);
     this.errorMsg.set(null);
     this.savedMsg.set(null);
-    const secs = Math.floor(Number(this.autoLockSecs));
-    if (!Number.isFinite(secs) || secs < 30 || secs > 86400) {
-      this.errorMsg.set('Auto-lock must be between 30 seconds and 24 hours.');
-      this.busy.set(false);
-      return;
-    }
-    const clearSecs = Math.floor(Number(this.clipboardClearSecs));
-    if (!Number.isFinite(clearSecs) || clearSecs < 1 || clearSecs > 600) {
-      this.errorMsg.set('Clipboard clear delay must be between 1 and 600 seconds.');
-      this.busy.set(false);
-      return;
-    }
-    const historyLimit = Math.floor(Number(this.passwordHistoryLimit));
-    if (!Number.isFinite(historyLimit) || historyLimit < 0 || historyLimit > 50) {
-      this.errorMsg.set('Password history must be between 0 and 50 entries.');
+    const validation = validateSettingsForm(
+      {
+        autoLockSecs: this.autoLockSecs,
+        clipboardClearSecs: this.clipboardClearSecs,
+        passwordHistoryLimit: this.passwordHistoryLimit,
+      },
+      this.bounds(),
+    );
+    if (!validation.ok) {
+      this.errorMsg.set(validation.error);
       this.busy.set(false);
       return;
     }
     try {
-      await this.settings.update({
-        autoLockSecs: secs,
-        clipboardClearSecs: clearSecs,
-        passwordHistoryLimit: historyLimit,
-      });
+      await this.settings.update(validation.values);
       this.flash(this.savedMsg, 'Settings saved.', 3000);
     } catch (e) {
       this.errorMsg.set(formatBackendError(e));

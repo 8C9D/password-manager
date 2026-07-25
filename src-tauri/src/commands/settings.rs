@@ -68,6 +68,52 @@ pub(crate) fn password_history_limit(conn: &rusqlite::Connection) -> u64 {
     .clamp(MIN_PASSWORD_HISTORY_LIMIT, MAX_PASSWORD_HISTORY_LIMIT)
 }
 
+/// The accepted range and default for one numeric setting.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Bound {
+    pub min: u64,
+    pub max: u64,
+    pub default: u64,
+}
+
+/// Every bound `update_settings` enforces, so the settings form can validate
+/// against the same numbers instead of repeating them. A bound changed here but
+/// not in the template used to produce a form that rejected values the backend
+/// accepts, or offered values it refuses.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsBounds {
+    pub auto_lock_secs: Bound,
+    pub clipboard_clear_secs: Bound,
+    pub password_history_limit: Bound,
+}
+
+fn settings_bounds() -> SettingsBounds {
+    SettingsBounds {
+        auto_lock_secs: Bound {
+            min: MIN_AUTO_LOCK_SECS,
+            max: MAX_AUTO_LOCK_SECS,
+            default: DEFAULT_AUTO_LOCK_SECS,
+        },
+        clipboard_clear_secs: Bound {
+            min: MIN_CLIPBOARD_CLEAR_SECS,
+            max: MAX_CLIPBOARD_CLEAR_SECS,
+            default: DEFAULT_CLIPBOARD_CLEAR_SECS,
+        },
+        password_history_limit: Bound {
+            min: MIN_PASSWORD_HISTORY_LIMIT,
+            max: MAX_PASSWORD_HISTORY_LIMIT,
+            default: DEFAULT_PASSWORD_HISTORY_LIMIT,
+        },
+    }
+}
+
+#[tauri::command]
+pub fn get_settings_bounds() -> SettingsBounds {
+    settings_bounds()
+}
+
 fn get_settings_impl(state: &AppState) -> Result<Settings, AppError> {
     with_state(state, |s| {
         Ok(Settings {
@@ -210,6 +256,53 @@ mod tests {
         let fetched = get_settings_impl(&state).unwrap();
         assert_eq!(fetched.auto_lock_secs, 900);
         assert_eq!(fetched.clipboard_clear_secs, 45);
+    }
+
+    /// The published bounds are only useful if `update_settings` actually
+    /// enforces them: drive each edge through the real validator rather than
+    /// comparing the struct to the same constants it was built from.
+    #[test]
+    fn published_bounds_match_what_update_settings_enforces() {
+        let b = settings_bounds();
+        let state = unlocked_state();
+
+        let auto_lock = |v: u64| Settings {
+            auto_lock_secs: v,
+            clipboard_clear_secs: DEFAULT_CLIPBOARD_CLEAR_SECS,
+            password_history_limit: DEFAULT_PASSWORD_HISTORY_LIMIT,
+        };
+        assert!(update_settings_impl(&state, auto_lock(b.auto_lock_secs.min)).is_ok());
+        assert!(update_settings_impl(&state, auto_lock(b.auto_lock_secs.max)).is_ok());
+        assert!(update_settings_impl(&state, auto_lock(b.auto_lock_secs.min - 1)).is_err());
+        assert!(update_settings_impl(&state, auto_lock(b.auto_lock_secs.max + 1)).is_err());
+
+        let clipboard = |v: u64| Settings {
+            auto_lock_secs: DEFAULT_AUTO_LOCK_SECS,
+            clipboard_clear_secs: v,
+            password_history_limit: DEFAULT_PASSWORD_HISTORY_LIMIT,
+        };
+        assert!(update_settings_impl(&state, clipboard(b.clipboard_clear_secs.min)).is_ok());
+        assert!(update_settings_impl(&state, clipboard(b.clipboard_clear_secs.max)).is_ok());
+        assert!(update_settings_impl(&state, clipboard(b.clipboard_clear_secs.min - 1)).is_err());
+        assert!(update_settings_impl(&state, clipboard(b.clipboard_clear_secs.max + 1)).is_err());
+
+        let history = |v: u64| Settings {
+            auto_lock_secs: DEFAULT_AUTO_LOCK_SECS,
+            clipboard_clear_secs: DEFAULT_CLIPBOARD_CLEAR_SECS,
+            password_history_limit: v,
+        };
+        assert!(update_settings_impl(&state, history(b.password_history_limit.min)).is_ok());
+        assert!(update_settings_impl(&state, history(b.password_history_limit.max)).is_ok());
+        assert!(update_settings_impl(&state, history(b.password_history_limit.max + 1)).is_err());
+
+        // Each published default must itself be inside its published range.
+        for bound in [
+            &b.auto_lock_secs,
+            &b.clipboard_clear_secs,
+            &b.password_history_limit,
+        ] {
+            assert!(bound.min <= bound.default && bound.default <= bound.max);
+        }
     }
 
     #[test]

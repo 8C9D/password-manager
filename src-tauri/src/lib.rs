@@ -50,6 +50,7 @@ pub fn run() {
             commands::categories::delete_category,
             commands::generator::generate_password,
             commands::settings::get_settings,
+            commands::settings::get_settings_bounds,
             commands::settings::update_settings,
             commands::clipboard::copy_to_clipboard,
             commands::transfer::export_vault,

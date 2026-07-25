@@ -10,7 +10,8 @@
     <section class="section">
       <h3>Auto-lock</h3>
       <p class="muted small">
-        Vault will lock automatically after this many seconds of inactivity. Minimum 30 seconds.
+        Vault will lock automatically after this many seconds of inactivity
+        ({{ bounds().autoLockSecs.min }}–{{ bounds().autoLockSecs.max }}).
       </p>
       <div class="presets">
         @for (p of presets; track p.secs) {
@@ -29,23 +30,24 @@
         <input
           type="number"
           [(ngModel)]="autoLockSecs"
-          min="30"
-          max="86400"
+          [min]="bounds().autoLockSecs.min"
+          [max]="bounds().autoLockSecs.max"
           name="autoLockSecs"
         />
       </label>
 
       <h3>Clipboard</h3>
       <p class="muted small">
-        Copied values are wiped from the clipboard after this many seconds (1–600).
+        Copied values are wiped from the clipboard after this many seconds
+        ({{ bounds().clipboardClearSecs.min }}–{{ bounds().clipboardClearSecs.max }}).
       </p>
       <label class="custom">
         Clear after (seconds)
         <input
           type="number"
           [(ngModel)]="clipboardClearSecs"
-          min="1"
-          max="600"
+          [min]="bounds().clipboardClearSecs.min"
+          [max]="bounds().clipboardClearSecs.max"
           name="clipboardClearSecs"
         />
       </label>
@@ -53,7 +55,8 @@
       <h3>Password history</h3>
       <p class="muted small">
         Previous passwords kept per entry when you change one, so a mistaken change can be
-        recovered (0–50). Set to 0 to keep none. Lowering this discards anything already
+        recovered ({{ bounds().passwordHistoryLimit.min }}–{{ bounds().passwordHistoryLimit.max }}).
+        Set to 0 to keep none. Lowering this discards anything already
         stored above the new limit.
       </p>
       <label class="custom">
@@ -61,8 +64,8 @@
         <input
           type="number"
           [(ngModel)]="passwordHistoryLimit"
-          min="0"
-          max="50"
+          [min]="bounds().passwordHistoryLimit.min"
+          [max]="bounds().passwordHistoryLimit.max"
           name="passwordHistoryLimit"
         />
       </label>
