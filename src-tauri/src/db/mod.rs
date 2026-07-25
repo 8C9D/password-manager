@@ -300,6 +300,205 @@ mod tests {
         assert_eq!(changed.as_deref(), Some("2026-01-01T00:00:00Z"));
     }
 
+    /// A database as a build shipping migrations 1..=`version` would have left
+    /// it: the baseline schema plus exactly that prefix of the real migration
+    /// list, with `user_version` set accordingly.
+    fn conn_at_version(version: i32) -> Connection {
+        let mut conn = fresh_conn();
+        let prefix: Vec<Migration> = MIGRATIONS
+            .iter()
+            .filter(|m| m.version <= version)
+            .map(|m| Migration {
+                version: m.version,
+                sql: m.sql,
+            })
+            .collect();
+        migrate(&mut conn, &prefix).unwrap();
+        assert_eq!(user_version(&conn).unwrap(), version);
+        conn
+    }
+
+    #[test]
+    fn a_vault_from_any_shipped_version_upgrades_straight_to_the_latest() {
+        // Not every user upgrades one release at a time. A vault last opened at
+        // v2 has to survive the whole remaining chain in one run, and the rows
+        // it already holds have to come through it intact - a later migration
+        // that assumes a column an earlier one only backfills would lose data
+        // exactly here.
+        for start in 0..=LATEST_VERSION {
+            let mut conn = conn_at_version(start);
+            conn.execute(
+                "INSERT INTO categories (id, name, created_at, updated_at)
+                 VALUES (1, 'Work', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO password_entries
+                    (id, category_id, title, username, url_or_app_name,
+                     encrypted_password, password_nonce, created_at, updated_at)
+                 VALUES (1, 1, 'GitHub', 'alice', 'github.com', X'CAFEBABE',
+                         X'000102030405060708090A0B',
+                         '2026-01-01T00:00:00Z', '2026-02-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO settings (key, value, updated_at)
+                 VALUES ('auto_lock_secs', '600', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+
+            migrate(&mut conn, MIGRATIONS).unwrap();
+
+            assert_eq!(
+                user_version(&conn).unwrap(),
+                LATEST_VERSION,
+                "starting from v{start}"
+            );
+            let (title, ciphertext, favorite, tags, deleted, expiry): (
+                String,
+                Vec<u8>,
+                bool,
+                String,
+                Option<String>,
+                Option<u32>,
+            ) = conn
+                .query_row(
+                    "SELECT title, encrypted_password, is_favorite, tags,
+                            deleted_at, password_expiry_days
+                     FROM password_entries WHERE id = 1",
+                    [],
+                    |r| {
+                        Ok((
+                            r.get(0)?,
+                            r.get(1)?,
+                            r.get(2)?,
+                            r.get(3)?,
+                            r.get(4)?,
+                            r.get(5)?,
+                        ))
+                    },
+                )
+                .unwrap();
+            assert_eq!(title, "GitHub", "starting from v{start}");
+            assert_eq!(ciphertext, vec![0xCA, 0xFE, 0xBA, 0xBE]);
+            // The defaults every pre-existing row must land on.
+            assert!(!favorite, "starting from v{start}");
+            assert_eq!(tags, "[]", "starting from v{start}");
+            assert_eq!(deleted, None, "a migrated row must not arrive trashed");
+            assert_eq!(expiry, None, "a migrated row must not arrive with a reminder");
+
+            let value: String = conn
+                .query_row(
+                    "SELECT value FROM settings WHERE key = 'auto_lock_secs'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(value, "600", "starting from v{start}");
+            let cat: String = conn
+                .query_row("SELECT name FROM categories WHERE id = 1", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(cat, "Work", "starting from v{start}");
+        }
+    }
+
+    #[test]
+    fn the_password_change_time_is_backfilled_only_for_rows_that_predate_it() {
+        // Migration 3 backfills from updated_at, so a vault that starts at v2
+        // or earlier gets the approximation; one already at v3+ keeps whatever
+        // it recorded. Staleness auditing reads this column, so a backfill that
+        // silently overwrote a real value would reset every password's age.
+        let mut before = conn_at_version(2);
+        before
+            .execute(
+                "INSERT INTO password_entries
+                    (id, title, username, url_or_app_name,
+                     encrypted_password, password_nonce, created_at, updated_at)
+                 VALUES (1, 'Old', 'u', 'x', X'00', X'00',
+                         '2020-01-01T00:00:00Z', '2026-02-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        migrate(&mut before, MIGRATIONS).unwrap();
+        let changed: Option<String> = before
+            .query_row(
+                "SELECT password_changed_at FROM password_entries WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(changed.as_deref(), Some("2026-02-01T00:00:00Z"));
+
+        let mut after = conn_at_version(3);
+        after
+            .execute(
+                "INSERT INTO password_entries
+                    (id, title, username, url_or_app_name,
+                     encrypted_password, password_nonce, created_at, updated_at,
+                     password_changed_at)
+                 VALUES (1, 'Rotated', 'u', 'x', X'00', X'00',
+                         '2020-01-01T00:00:00Z', '2026-02-01T00:00:00Z',
+                         '2026-07-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        migrate(&mut after, MIGRATIONS).unwrap();
+        let kept: Option<String> = after
+            .query_row(
+                "SELECT password_changed_at FROM password_entries WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept.as_deref(), Some("2026-07-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn history_rows_survive_the_migrations_added_after_them() {
+        // password_history arrived at v4; v5 and v6 both alter
+        // password_entries, and the cascade between the two tables has to still
+        // be intact afterwards.
+        let mut conn = conn_at_version(4);
+        conn.execute(
+            "INSERT INTO password_entries
+                (id, title, username, url_or_app_name,
+                 encrypted_password, password_nonce, created_at, updated_at)
+             VALUES (1, 'E', 'u', 'x', X'00', X'00',
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO password_history
+                (entry_id, encrypted_password, password_nonce, changed_at)
+             VALUES (1, X'DEADBEEF', X'000102030405060708090A0B',
+                     '2026-01-02T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        migrate(&mut conn, MIGRATIONS).unwrap();
+
+        let kept: Vec<u8> = conn
+            .query_row(
+                "SELECT encrypted_password FROM password_history WHERE entry_id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+
+        enable_foreign_keys(&conn).unwrap();
+        conn.execute("DELETE FROM password_entries WHERE id = 1", []).unwrap();
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM password_history", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 0, "history must still cascade with its entry");
+    }
+
     #[test]
     fn newer_db_version_is_refused() {
         let mut conn = fresh_conn();

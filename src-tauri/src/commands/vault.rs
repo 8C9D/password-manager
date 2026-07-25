@@ -690,6 +690,55 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_attempts_each_consume_their_own_count_rather_than_sharing_one() {
+        use std::sync::Arc;
+
+        // The gate reads the failure count and records the attempt under one
+        // lock. If the count were instead recorded only after the (slow,
+        // unlocked) verification, every thread here would read the same
+        // pre-attempt count, all pass the gate, and all run the KDF - handing
+        // an attacker N free guesses per backoff window instead of one.
+        //
+        // Starting exactly at FREE_UNLOCK_ATTEMPTS is what makes this
+        // discriminating: the count is inside the free window, so the first
+        // attempt through is allowed, and it is that attempt's own increment
+        // that must shut the door on the rest.
+        let state = Arc::new(state_with_vault());
+        lock_vault_impl(&state).unwrap();
+        {
+            let mut guard = state.inner.lock().unwrap();
+            guard.failed_unlocks = FREE_UNLOCK_ATTEMPTS;
+            guard.last_failed_unlock = Some(Instant::now());
+        }
+
+        const THREADS: usize = 10;
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let state = Arc::clone(&state);
+                std::thread::spawn(move || unlock_vault_impl(&state, "wrong".into()))
+            })
+            .collect();
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        let checked = results
+            .iter()
+            .filter(|r| matches!(r, Err(AppError::WrongPassword)))
+            .count();
+        let refused = results
+            .iter()
+            .filter(|r| matches!(r, Err(AppError::TooManyUnlockAttempts(_))))
+            .count();
+        assert_eq!(checked, 1, "only one guess may get past the gate");
+        assert_eq!(refused, THREADS - 1);
+        // The one attempt that ran is the only one counted; the refused ones
+        // are not attempts and must not inflate the backoff.
+        assert_eq!(
+            state.inner.lock().unwrap().failed_unlocks,
+            FREE_UNLOCK_ATTEMPTS + 1
+        );
+    }
+
+    #[test]
     fn successful_unlock_resets_the_failure_counter() {
         let state = state_with_vault();
         lock_vault_impl(&state).unwrap();
