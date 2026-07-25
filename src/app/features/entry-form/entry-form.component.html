@@ -1,12 +1,18 @@
 <div class="form-shell">
   <header class="form-head">
-    <h2>{{ isEdit() ? 'Edit entry' : 'New entry' }}</h2>
+    <h2>{{ isEdit() ? 'Edit entry' : duplicating() ? 'Duplicate entry' : 'New entry' }}</h2>
     <a [routerLink]="cancelLink()" class="btn small">Cancel</a>
   </header>
 
   @if (loading()) {
     <p class="muted">Loading…</p>
   } @else {
+    @if (duplicating()) {
+      <p class="muted small">
+        Prefilled from the original. Saving creates a separate entry; the
+        two-factor secret is not copied.
+      </p>
+    }
     <form (ngSubmit)="onSubmit()" class="form">
       <label>
         Title<span class="req">*</span>

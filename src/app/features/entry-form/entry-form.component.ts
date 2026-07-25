@@ -15,6 +15,13 @@ import { formatBackendError } from '../../core/services/tauri-invoke';
 import { PasswordGeneratorPanelComponent } from '../password-generator/password-generator-panel.component';
 import { PasswordStrengthMeterComponent } from '../password-strength/password-strength-meter.component';
 
+/** Parse a route/query id, returning null for anything that is not a positive integer. */
+function parseId(raw: string | null): number | null {
+  if (raw === null) return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 @Component({
   selector: 'app-entry-form',
   standalone: true,
@@ -54,6 +61,7 @@ export class EntryFormComponent implements OnInit {
   protected readonly passwordTouched = signal(false);
   protected readonly categories = signal<Category[]>([]);
   protected readonly editingId = signal<number | null>(null);
+  protected readonly duplicating = signal(false);
 
   protected isEdit = () => this.editingId() !== null;
   protected cancelLink = () => {
@@ -72,20 +80,30 @@ export class EntryFormComponent implements OnInit {
       return;
     }
     this.editingId.set(id);
+
+    // "Duplicate" prefills a brand-new entry from an existing one, so the id is
+    // a source to copy from, never a row to overwrite: editingId stays null and
+    // submit takes the create path.
+    const sourceId = id === null ? parseId(this.route.snapshot.queryParamMap.get('duplicate')) : null;
+
     try {
       await this.categoriesSvc.list();
       this.categories.set(this.categoriesSvc.categories());
-      if (id !== null) {
-        const full = await this.entries.get(id);
-        this.title = full.title;
+      const loadFrom = id ?? sourceId;
+      if (loadFrom !== null) {
+        const full = await this.entries.get(loadFrom);
+        this.title = sourceId !== null ? `${full.title} (copy)` : full.title;
         this.username = full.username;
         this.urlOrAppName = full.urlOrAppName;
         this.password = full.password;
         this.notes = full.notes ?? '';
         this.categoryId = full.categoryId;
-        this.hasExistingTotp = full.hasTotp;
+        // A duplicate carries no 2FA: get_entry only reports whether a secret
+        // exists, never the secret itself, so there is nothing to copy.
+        this.hasExistingTotp = sourceId !== null ? false : full.hasTotp;
         this.favorite = full.favorite;
         this.tagsInput = full.tags.join(', ');
+        this.duplicating.set(sourceId !== null);
       }
     } catch (e) {
       this.errorMsg.set(formatBackendError(e));

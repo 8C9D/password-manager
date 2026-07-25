@@ -2,18 +2,21 @@
   <header class="topbar">
     <h1>{{ vault.status()?.vaultName || 'Password Manager' }}</h1>
     <input
+      #searchBox
       type="search"
-      placeholder="Search title / username / URL"
+      placeholder="Search title / username / URL  (/)"
       class="search"
       [ngModel]="entries.searchQuery()"
       (ngModelChange)="entries.searchQuery.set($event)"
       name="search"
     />
     <div class="spacer"></div>
-    <a routerLink="/vault/new" class="btn primary">+ Add entry</a>
+    <a routerLink="/vault/new" class="btn primary" title="New entry (Ctrl/Cmd+N)">+ Add entry</a>
     <a routerLink="/vault/health" class="btn" title="Vault health">🛡</a>
     <a routerLink="/vault/settings" class="btn" title="Settings">⚙</a>
-    <button class="btn" type="button" (click)="onLock()">Lock</button>
+    <button class="btn" type="button" title="Lock vault (Ctrl/Cmd+L)" (click)="onLock()">
+      Lock
+    </button>
   </header>
   @if (lockError(); as msg) {
     <div class="lock-error-banner">Failed to lock the vault: {{ msg }}</div>

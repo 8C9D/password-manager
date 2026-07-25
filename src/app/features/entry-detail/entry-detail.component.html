@@ -17,6 +17,13 @@
           {{ e.favorite ? '★' : '☆' }}
         </button>
         <a [routerLink]="['/vault', e.id, 'edit']" class="btn small">Edit</a>
+        <a
+          routerLink="/vault/new"
+          [queryParams]="{ duplicate: e.id }"
+          class="btn small"
+          title="Create a new entry prefilled from this one"
+          >Duplicate</a
+        >
         <button type="button" class="btn small danger" (click)="onDelete(e.id, e.title)">
           Delete
         </button>
