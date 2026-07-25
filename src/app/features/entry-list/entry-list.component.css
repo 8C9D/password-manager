@@ -78,6 +78,6 @@ a.selected .sub {
   font-size: 0.8rem;
 }
 .fav {
-  color: #e0a400;
+  color: var(--favorite);
   font-size: 0.85em;
 }

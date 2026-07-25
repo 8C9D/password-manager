@@ -15,6 +15,10 @@
   --accent-soft: #e5edff;
   --accent-strong: #1e40af;
   --danger: #b91c1c;
+  /* Text drawn on top of an --accent fill. The dark theme's accent is a light
+     blue, so white on it fails contrast; it needs dark text instead. */
+  --on-accent: #ffffff;
+  --favorite: #8a6400;
   color-scheme: light;
   font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
 }
@@ -31,6 +35,8 @@
     --accent-soft: #1f2a47;
     --accent-strong: #c8d8ff;
     --danger: #ff8080;
+    --on-accent: #10131a;
+    --favorite: #ffc63d;
     color-scheme: dark;
   }
 }
@@ -46,6 +52,8 @@
   --accent-soft: #1f2a47;
   --accent-strong: #c8d8ff;
   --danger: #ff8080;
+  --on-accent: #10131a;
+  --favorite: #ffc63d;
   color-scheme: dark;
 }
 
@@ -99,7 +107,7 @@ select {
 
 .btn.primary {
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
   border-color: var(--accent);
 }
 

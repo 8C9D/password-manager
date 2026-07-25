@@ -4,6 +4,7 @@
     <input
       #searchBox
       type="search"
+      aria-label="Search entries by title, username, or URL"
       placeholder="Search title / username / URL  (/)"
       class="search"
       [ngModel]="entries.searchQuery()"
@@ -38,8 +39,8 @@
     <section class="list-pane">
       <app-entry-list />
     </section>
-    <section class="detail-pane">
+    <main class="detail-pane">
       <router-outlet />
-    </section>
+    </main>
   </div>
 </div>

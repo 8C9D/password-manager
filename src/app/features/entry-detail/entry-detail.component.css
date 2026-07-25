@@ -85,8 +85,8 @@ dd {
   border-color: var(--danger);
 }
 .star-btn.active {
-  color: #e0a400;
-  border-color: #e0a400;
+  color: var(--favorite);
+  border-color: var(--favorite);
 }
 .tags {
   display: flex;
