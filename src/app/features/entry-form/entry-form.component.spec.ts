@@ -26,6 +26,7 @@ function entry(id: number, over: Partial<EntryFull> = {}): EntryFull {
     tags: ['work'],
     passwordExpiryDays: 90,
     passwordDueAt: '2026-04-01T00:00:00Z',
+    fields: [],
     ...over,
   };
 }

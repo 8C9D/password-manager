@@ -428,6 +428,28 @@ fn change_master_password_impl(
             )?;
         }
 
+        // Custom field values are encrypted with the vault key too, so they
+        // rotate here for exactly the same reason as password history: a
+        // column left on the old key is unreadable the moment this commits.
+        let mut stmt =
+            tx.prepare("SELECT id, encrypted_value, value_nonce FROM entry_fields")?;
+        let fields: Vec<(i64, Vec<u8>, Vec<u8>)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        for (id, enc_value, value_nonce) in fields {
+            let plain = Zeroizing::new(crypto::decrypt(&old_key, &enc_value, &value_nonce)?);
+            let ct = crypto::encrypt(&new_key, &plain)?;
+            tx.execute(
+                "UPDATE entry_fields SET
+                    encrypted_value = ?1,
+                    value_nonce = ?2
+                 WHERE id = ?3",
+                rusqlite::params![ct.bytes, ct.nonce.as_slice(), id],
+            )?;
+        }
+
         tx.commit()?;
 
         // Only after the commit is the new key authoritative; the old key
@@ -969,6 +991,52 @@ mod tests {
             vault_status_impl(&state),
             Err(AppError::Database(_))
         ));
+    }
+
+    #[test]
+    fn change_reencrypts_custom_fields_so_they_survive_a_rekey() {
+        // The same trap the TOTP columns fell into in the 2026-07-22 audit: a
+        // new encrypt-at-rest table the rekey loop does not know about is left
+        // under a key whose salt is gone, so every value in it is permanently
+        // unreadable afterwards.
+        let state = state_with_vault();
+        let id = insert_entry(&state, "GitHub", "current-password", None);
+
+        let old_key = current_key(&state);
+        for (i, (label, value)) in [("Recovery code", "abc-123"), ("PIN", "4242")]
+            .iter()
+            .enumerate()
+        {
+            let ct = crypto::encrypt(&old_key, value.as_bytes()).unwrap();
+            let guard = state.inner.lock().unwrap();
+            guard
+                .conn
+                .execute(
+                    "INSERT INTO entry_fields
+                        (entry_id, label, encrypted_value, value_nonce, is_secret, position)
+                     VALUES (?1, ?2, ?3, ?4, 1, ?5)",
+                    rusqlite::params![id, label, ct.bytes, ct.nonce.as_slice(), i as i64],
+                )
+                .unwrap();
+        }
+
+        change_master_password_impl(&state, PW_OLD.into(), PW_NEW.into()).unwrap();
+
+        let new_key = current_key(&state);
+        let guard = state.inner.lock().unwrap();
+        let fields =
+            crate::commands::entries::read_fields(&guard.conn, &new_key, id).unwrap();
+        drop(guard);
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].label, "Recovery code");
+        assert_eq!(fields[0].value, "abc-123");
+        assert_eq!(fields[1].value, "4242");
+        // And the old key must no longer open them.
+        let guard = state.inner.lock().unwrap();
+        assert!(
+            crate::commands::entries::read_fields(&guard.conn, &old_key, id).is_err(),
+            "the old key must not still decrypt the rotated fields"
+        );
     }
 
     #[test]

@@ -117,6 +117,21 @@ struct ExportEntry {
     /// correctly reads as "no reminder".
     #[serde(default)]
     password_expiry_days: Option<u32>,
+    /// User-defined extra fields. `#[serde(default)]` keeps older export files
+    /// (which had none) readable.
+    #[serde(default)]
+    fields: Vec<ExportField>,
+}
+
+/// A custom field in an export file. The value is a `SecretString` for the same
+/// reason the password is: it is vault plaintext sitting in this structure.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportField {
+    label: String,
+    value: SecretString,
+    #[serde(default)]
+    secret: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -256,6 +271,15 @@ fn gather_payload(
             });
         }
 
+        let fields = crate::commands::entries::read_fields(&s.conn, key, row.id)?
+            .into_iter()
+            .map(|f| ExportField {
+                label: f.label,
+                value: SecretString::new(f.value),
+                secret: f.secret,
+            })
+            .collect();
+
         entries.push(ExportEntry {
             title: row.title,
             username: row.username,
@@ -272,6 +296,7 @@ fn gather_payload(
             password_changed_at: row.password_changed_at,
             password_history,
             password_expiry_days: row.password_expiry_days,
+            fields,
         });
     }
     drop(history_stmt);
@@ -719,6 +744,22 @@ fn import_vault_impl(
                     ],
                 )?;
             }
+            // Custom fields ride along with the entry and are re-encrypted
+            // under this vault's key. They go through the same normalizer the
+            // UI write path uses, so a hand-edited file cannot store a field
+            // that the entry form would then refuse to save.
+            let fields: Vec<crate::commands::entries::CustomField> = entry
+                .fields
+                .iter()
+                .map(|f| crate::commands::entries::CustomField {
+                    label: f.label.clone(),
+                    value: f.value.to_string(),
+                    secret: f.secret,
+                })
+                .collect();
+            let fields = crate::commands::entries::normalize_fields(&fields)?;
+            crate::commands::entries::write_fields(&tx, key, entry_id, &fields)?;
+
             // The file can carry more history than this vault retains (it was
             // written by a vault with a higher limit, or hand-edited).
             crate::commands::history::prune_history(&tx, entry_id, history_limit)?;
@@ -1772,6 +1813,109 @@ mod tests {
             .query_row("SELECT name FROM categories", [], |r| r.get(0))
             .unwrap();
         assert_eq!(name, "日".repeat(64));
+    }
+
+    #[test]
+    fn export_import_preserves_custom_fields() {
+        // The other half of the encrypted-column ripple rule: a new encrypted
+        // table that gather_payload or the import loop does not carry is data
+        // the user silently loses on a backup-and-restore.
+        let source = state_with_vault(PW);
+        add_entry(&source, "GitHub", "current", None, None);
+        add_entry(&source, "Bank", "s3cret!", None, None);
+
+        let id: i64 = source
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row(
+                "SELECT id FROM password_entries WHERE title = 'GitHub'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let key = **source.inner.lock().unwrap().key.as_ref().unwrap();
+        {
+            let guard = source.inner.lock().unwrap();
+            crate::commands::entries::write_fields(
+                &guard.conn,
+                &key,
+                id,
+                &[
+                    crate::commands::entries::CustomField {
+                        label: "Recovery code".into(),
+                        value: "abc-123".into(),
+                        secret: true,
+                    },
+                    crate::commands::entries::CustomField {
+                        label: "Support PIN".into(),
+                        value: "4242".into(),
+                        secret: false,
+                    },
+                ],
+            )
+            .unwrap();
+        }
+
+        let file = TempFile::new("fields-roundtrip.json");
+        export_vault_impl(&source, PW.into(), &file.0).unwrap();
+        let target = state_with_vault(PW);
+        import_vault_impl(&target, &file.0, PW.into()).unwrap();
+
+        let target_key = **target.inner.lock().unwrap().key.as_ref().unwrap();
+        let guard = target.inner.lock().unwrap();
+        let new_id: i64 = guard
+            .conn
+            .query_row(
+                "SELECT id FROM password_entries WHERE title = 'GitHub'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let fields =
+            crate::commands::entries::read_fields(&guard.conn, &target_key, new_id).unwrap();
+        assert_eq!(fields.len(), 2);
+        // Order, labels, values, and the mask flag all have to survive.
+        assert_eq!(fields[0].label, "Recovery code");
+        assert_eq!(fields[0].value, "abc-123");
+        assert!(fields[0].secret);
+        assert_eq!(fields[1].label, "Support PIN");
+        assert_eq!(fields[1].value, "4242");
+        assert!(!fields[1].secret);
+
+        // An entry with no fields round-trips with none.
+        let bank_id: i64 = guard
+            .conn
+            .query_row(
+                "SELECT id FROM password_entries WHERE title = 'Bank'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            crate::commands::entries::read_fields(&guard.conn, &target_key, bank_id)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn import_rejects_a_custom_field_a_hand_edited_file_made_invalid() {
+        let mut entry = crafted_entry("X", "pw");
+        entry["fields"] = serde_json::json!([{ "label": "", "value": "v", "secret": true }]);
+        let payload = serde_json::json!({
+            "categories": [],
+            "entries": [entry],
+            "settings": {"autoLockSecs": null}
+        });
+        let file = TempFile::new("bad-field.json");
+        write_crafted_export(&payload, &file);
+
+        let state = state_with_vault(PW);
+        let err = import_vault_impl(&state, &file.0, PW.into()).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+        assert!(decrypted_entries(&state).is_empty(), "nothing imported");
     }
 
     #[test]

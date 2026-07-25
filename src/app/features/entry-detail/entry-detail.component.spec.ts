@@ -43,6 +43,7 @@ function entry(id: number, over: Partial<EntryFull> = {}): EntryFull {
     tags: [],
     passwordExpiryDays: null,
     passwordDueAt: null,
+    fields: [],
     ...over,
   };
 }
@@ -183,6 +184,46 @@ describe('EntryDetailComponent', () => {
 
     expect(component.history()).toBeNull();
     expect(fixture.nativeElement.textContent).not.toContain('old-secret');
+
+    fixture.destroy();
+  });
+
+  it('masks a secret custom field until it is revealed, and re-masks on navigation', async () => {
+    const fixture = TestBed.createComponent(EntryDetailComponent);
+    fixture.detectChanges();
+    call(getCalls, 1).resolve(
+      entry(1, {
+        fields: [
+          { label: 'Recovery code', value: 'abc-123', secret: true },
+          { label: 'Support PIN', value: '4242', secret: false },
+        ],
+      }),
+    );
+    await settle(fixture);
+
+    let text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Recovery code');
+    expect(text).not.toContain('abc-123');
+    // A field the user marked non-secret is readable straight away.
+    expect(text).toContain('4242');
+
+    const component = fixture.componentInstance as unknown as {
+      toggleFieldReveal: (i: number) => void;
+      revealedFieldIndex: () => number | null;
+    };
+    component.toggleFieldReveal(0);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('abc-123');
+
+    // Opening another entry must not carry the revealed state across.
+    params.next(convertToParamMap({ id: '2' }));
+    call(getCalls, 2).resolve(
+      entry(2, { fields: [{ label: 'Recovery code', value: 'zzz-999', secret: true }] }),
+    );
+    await settle(fixture);
+    text = fixture.nativeElement.textContent as string;
+    expect(component.revealedFieldIndex()).toBeNull();
+    expect(text).not.toContain('zzz-999');
 
     fixture.destroy();
   });

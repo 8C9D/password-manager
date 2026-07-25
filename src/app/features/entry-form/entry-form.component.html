@@ -127,6 +127,60 @@
         </p>
       }
 
+      <fieldset class="custom-fields">
+        <legend>Custom fields</legend>
+        @if (fields.length === 0) {
+          <p class="muted totp-hint">
+            Optional: anything else worth keeping with this entry, such as a
+            recovery code or a support PIN. Values are encrypted like the
+            password.
+          </p>
+        }
+        @for (f of fields; track trackField($index)) {
+          <div class="custom-field">
+            <input
+              type="text"
+              class="field-label"
+              [name]="'fieldLabel' + $index"
+              [(ngModel)]="f.label"
+              [attr.aria-label]="'Label for custom field ' + ($index + 1)"
+              placeholder="Label"
+              maxlength="64"
+            />
+            <input
+              [type]="f.secret ? 'password' : 'text'"
+              class="field-value"
+              [name]="'fieldValue' + $index"
+              [(ngModel)]="f.value"
+              [attr.aria-label]="'Value for custom field ' + ($index + 1)"
+              placeholder="Value"
+              autocomplete="off"
+            />
+            <label class="field-secret">
+              <input
+                type="checkbox"
+                [name]="'fieldSecret' + $index"
+                [(ngModel)]="f.secret"
+              />
+              Hide
+            </label>
+            <button
+              type="button"
+              class="btn small danger"
+              [attr.aria-label]="'Remove custom field ' + ($index + 1)"
+              (click)="removeField($index)"
+            >
+              Remove
+            </button>
+          </div>
+        }
+        <div class="add-field">
+          <button type="button" class="btn small" (click)="addField()">
+            + Add field
+          </button>
+        </div>
+      </fieldset>
+
       @if (errorMsg()) {
         <p class="warn">{{ errorMsg() }}</p>
       }

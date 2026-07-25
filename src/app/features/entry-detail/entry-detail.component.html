@@ -96,6 +96,23 @@
         </dd>
       }
 
+      @for (f of e.fields; track $index) {
+        <dt>{{ f.label }}</dt>
+        <dd>
+          <span class="value mono">
+            {{ !f.secret || revealedFieldIndex() === $index ? f.value : mask(f.value) }}
+          </span>
+          @if (f.secret) {
+            <button class="btn small" type="button" (click)="toggleFieldReveal($index)">
+              {{ revealedFieldIndex() === $index ? 'Hide' : 'Show' }}
+            </button>
+          }
+          <button class="btn small" type="button" (click)="copy(f.value, f.label)">
+            Copy
+          </button>
+        </dd>
+      }
+
       @if (e.notes) {
         <dt>Notes</dt>
         <dd>

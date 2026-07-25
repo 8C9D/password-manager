@@ -11,6 +11,16 @@ export interface EntrySummary {
   tags: string[];
 }
 
+/**
+ * A user-defined extra field on an entry. The value is encrypted at rest like
+ * a password; `secret` only decides whether the UI masks it.
+ */
+export interface CustomField {
+  label: string;
+  value: string;
+  secret: boolean;
+}
+
 export interface EntryFull {
   id: number;
   categoryId: number | null;
@@ -29,6 +39,7 @@ export interface EntryFull {
   passwordExpiryDays: number | null;
   /** When the password is next due for rotation, or null with no reminder. */
   passwordDueAt: string | null;
+  fields: CustomField[];
 }
 
 /** How an entry write should treat the stored TOTP secret. */
@@ -48,6 +59,7 @@ export interface EntryInput {
   favorite?: boolean;
   tags?: string[];
   passwordExpiryDays?: number | null;
+  fields?: CustomField[];
 }
 
 /** An entry sitting in the trash: restorable until it is purged. */

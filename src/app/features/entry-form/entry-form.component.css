@@ -75,3 +75,51 @@ select:focus {
 .muted {
   color: var(--muted);
 }
+.custom-fields {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.85rem 0.85rem;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.custom-fields legend {
+  padding: 0 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.custom-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.custom-field .field-label {
+  flex: 1 1 8rem;
+  min-width: 0;
+}
+.custom-field .field-value {
+  flex: 2 1 12rem;
+  min-width: 0;
+}
+.field-secret {
+  display: inline-flex;
+  /* The form's `label` rule stacks label text above its control; this one sits
+     beside its checkbox instead. */
+  flex-direction: row;
+  align-items: center;
+  gap: 0.3rem;
+  /* Do not let the row's wrapping split the box from its word. */
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.field-secret input {
+  width: auto;
+  margin: 0;
+}
+.add-field {
+  display: flex;
+}

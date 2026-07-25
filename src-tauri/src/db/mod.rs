@@ -65,6 +65,25 @@ const MIGRATIONS: &[Migration] = &[
         // this one is the user's own cadence for one account.
         sql: "ALTER TABLE password_entries ADD COLUMN password_expiry_days INTEGER;",
     },
+    Migration {
+        version: 7,
+        // User-defined extra fields on an entry. The value is encrypted with the
+        // vault key exactly like a password; the label is not, matching how
+        // title, username, and url_or_app_name are already stored in the clear.
+        // ON DELETE CASCADE relies on the per-connection foreign_keys pragma set
+        // in enable_foreign_keys, like password_history.
+        sql: "CREATE TABLE entry_fields (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  entry_id INTEGER NOT NULL
+                      REFERENCES password_entries(id) ON DELETE CASCADE,
+                  label TEXT NOT NULL,
+                  encrypted_value BLOB NOT NULL,
+                  value_nonce BLOB NOT NULL,
+                  is_secret INTEGER NOT NULL DEFAULT 1,
+                  position INTEGER NOT NULL DEFAULT 0
+              );
+              CREATE INDEX idx_fields_entry ON entry_fields(entry_id, position);",
+    },
 ];
 
 #[cfg(test)]

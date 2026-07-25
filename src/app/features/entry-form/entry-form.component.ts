@@ -5,7 +5,7 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { combineLatest } from 'rxjs';
 
 import { Category } from '../../core/models/category.model';
-import { EntryInput } from '../../core/models/entry.model';
+import { CustomField, EntryInput } from '../../core/models/entry.model';
 import { CategoryService } from '../../core/services/category.service';
 import {
   parseExpiryDays,
@@ -55,6 +55,7 @@ export class EntryFormComponent {
   protected favorite = false;
   protected tagsInput = '';
   protected passwordExpiryDays: number | string = '';
+  protected fields: CustomField[] = [];
 
   protected readonly busy = signal(false);
   protected readonly loading = signal(true);
@@ -104,6 +105,7 @@ export class EntryFormComponent {
     this.favorite = false;
     this.tagsInput = '';
     this.passwordExpiryDays = '';
+    this.fields = [];
     this.errorMsg.set(null);
     this.showPassword.set(false);
     this.showGenerator.set(false);
@@ -153,6 +155,9 @@ export class EntryFormComponent {
         this.favorite = full.favorite;
         this.tagsInput = full.tags.join(', ');
         this.passwordExpiryDays = full.passwordExpiryDays ?? '';
+        // A duplicate copies the extra fields; unlike the 2FA secret, they come
+        // back from get_entry in full, so there is something to copy.
+        this.fields = full.fields.map((f) => ({ ...f }));
         this.duplicating.set(sourceId !== null);
       }
     } catch (e) {
@@ -161,6 +166,18 @@ export class EntryFormComponent {
     } finally {
       if (token === this.loadToken) this.loading.set(false);
     }
+  }
+
+  protected addField(): void {
+    this.fields = [...this.fields, { label: '', value: '', secret: true }];
+  }
+
+  protected removeField(index: number): void {
+    this.fields = this.fields.filter((_, i) => i !== index);
+  }
+
+  protected trackField(index: number): number {
+    return index;
   }
 
   protected toggleShow(): void {
@@ -196,6 +213,7 @@ export class EntryFormComponent {
         favorite: this.favorite,
         tags: parseTagsInput(this.tagsInput),
         passwordExpiryDays: parseExpiryDays(this.passwordExpiryDays),
+        fields: this.fields,
       };
       const id = this.editingId();
       if (id !== null) {

@@ -48,8 +48,11 @@ export class EntryDetailComponent implements OnDestroy {
   protected readonly historyError = signal<string | null>(null);
   // At most one retired password is legible at a time.
   protected readonly revealedHistoryId = signal<number | null>(null);
+  // Same rule for custom fields marked secret.
+  protected readonly revealedFieldIndex = signal<number | null>(null);
 
   private hideTimer: ReturnType<typeof setTimeout> | null = null;
+  private fieldHideTimer: ReturnType<typeof setTimeout> | null = null;
   private historyHideTimer: ReturnType<typeof setTimeout> | null = null;
   private totpTimer: ReturnType<typeof setInterval> | null = null;
   private totpEntryId: number | null = null;
@@ -85,7 +88,28 @@ export class EntryDetailComponent implements OnDestroy {
   ngOnDestroy(): void {
     this.cancelAutoHide();
     this.cancelHistoryAutoHide();
+    this.cancelFieldAutoHide();
     this.stopTotp();
+  }
+
+  private cancelFieldAutoHide(): void {
+    if (this.fieldHideTimer !== null) {
+      clearTimeout(this.fieldHideTimer);
+      this.fieldHideTimer = null;
+    }
+  }
+
+  /** Reveal one secret custom field at a time, re-masking it after a while. */
+  protected toggleFieldReveal(index: number): void {
+    this.cancelFieldAutoHide();
+    const next = this.revealedFieldIndex() === index ? null : index;
+    this.revealedFieldIndex.set(next);
+    if (next !== null) {
+      this.fieldHideTimer = setTimeout(() => {
+        this.revealedFieldIndex.set(null);
+        this.fieldHideTimer = null;
+      }, REVEAL_HIDE_AFTER_MS);
+    }
   }
 
   private cancelAutoHide(): void {
@@ -109,6 +133,8 @@ export class EntryDetailComponent implements OnDestroy {
     this.entry.set(null);
     this.showPassword.set(false);
     this.cancelAutoHide();
+    this.cancelFieldAutoHide();
+    this.revealedFieldIndex.set(null);
     this.stopTotp();
     this.totpCode.set(null);
     this.resetHistory();

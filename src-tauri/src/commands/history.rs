@@ -198,6 +198,7 @@ mod tests {
             favorite: false,
             tags: vec![],
             password_expiry_days: None,
+            fields: vec![],
         }
     }
 

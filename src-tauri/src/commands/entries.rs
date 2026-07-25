@@ -22,6 +22,124 @@ pub enum TotpUpdate {
     Set { value: String },
 }
 
+/// A user-defined extra field on an entry.
+///
+/// The value is encrypted with the vault key like a password; the label is
+/// stored in the clear, the same choice already made for title, username, and
+/// url_or_app_name. `secret` only controls whether the UI masks the value - it
+/// is not a second encryption tier, and both kinds are encrypted at rest.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomField {
+    pub label: String,
+    pub value: String,
+    #[serde(default = "default_true")]
+    pub secret: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Bounds on custom fields, enforced server-side like every other write path.
+pub(crate) const MAX_FIELDS_PER_ENTRY: usize = 32;
+pub(crate) const MAX_FIELD_LABEL_CHARS: usize = 64;
+pub(crate) const MAX_FIELD_VALUE_CHARS: usize = 4096;
+
+/// Drop blank rows, then hold what is left to the documented bounds.
+///
+/// A blank row is what an untouched "add field" line in the form looks like, so
+/// discarding it is normal input handling rather than an error.
+pub(crate) fn normalize_fields(fields: &[CustomField]) -> Result<Vec<CustomField>, AppError> {
+    let kept: Vec<CustomField> = fields
+        .iter()
+        .filter(|f| !(f.label.trim().is_empty() && f.value.is_empty()))
+        .cloned()
+        .collect();
+    if kept.len() > MAX_FIELDS_PER_ENTRY {
+        return Err(AppError::Validation("too many custom fields on one entry"));
+    }
+    for f in &kept {
+        if f.label.trim().is_empty() {
+            return Err(AppError::Validation("a custom field needs a label"));
+        }
+        if f.label.chars().count() > MAX_FIELD_LABEL_CHARS {
+            return Err(AppError::Validation(
+                "a custom field label must be 64 characters or fewer",
+            ));
+        }
+        if f.value.chars().count() > MAX_FIELD_VALUE_CHARS {
+            return Err(AppError::Validation("a custom field value is too long"));
+        }
+    }
+    Ok(kept
+        .into_iter()
+        .map(|f| CustomField {
+            label: f.label.trim().to_string(),
+            ..f
+        })
+        .collect())
+}
+
+/// Replace an entry's custom fields wholesale, inside the caller's transaction.
+///
+/// Rewriting rather than diffing keeps the stored order equal to the order the
+/// form submitted, and means a removed field leaves no row behind.
+pub(crate) fn write_fields(
+    conn: &rusqlite::Connection,
+    key: &[u8; 32],
+    entry_id: i64,
+    fields: &[CustomField],
+) -> Result<(), AppError> {
+    conn.execute("DELETE FROM entry_fields WHERE entry_id = ?1", [entry_id])?;
+    for (position, field) in fields.iter().enumerate() {
+        let ct = crypto::encrypt(key, field.value.as_bytes())?;
+        conn.execute(
+            "INSERT INTO entry_fields
+                (entry_id, label, encrypted_value, value_nonce, is_secret, position)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                entry_id,
+                field.label,
+                ct.bytes,
+                ct.nonce.as_slice(),
+                field.secret,
+                position as i64,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// Read and decrypt an entry's custom fields, in their stored order.
+pub(crate) fn read_fields(
+    conn: &rusqlite::Connection,
+    key: &[u8; 32],
+    entry_id: i64,
+) -> Result<Vec<CustomField>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT label, encrypted_value, value_nonce, is_secret
+         FROM entry_fields WHERE entry_id = ?1 ORDER BY position, id",
+    )?;
+    type Row = (String, Vec<u8>, Vec<u8>, bool);
+    let rows: Vec<Row> = stmt
+        .query_map([entry_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+
+    let mut out = Vec::with_capacity(rows.len());
+    for (label, ciphertext, nonce, secret) in rows {
+        let plain = crypto::decrypt(key, &ciphertext, &nonce)?;
+        out.push(CustomField {
+            label,
+            value: String::from_utf8(plain)
+                .map_err(|_| AppError::Crypto("custom field value is not valid utf-8"))?,
+            secret,
+        });
+    }
+    Ok(out)
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntryInput {
@@ -41,6 +159,9 @@ pub struct EntryInput {
     /// `None` (and 0) mean no reminder.
     #[serde(default)]
     pub password_expiry_days: Option<u32>,
+    /// User-defined extra fields, replacing whatever the entry had.
+    #[serde(default)]
+    pub fields: Vec<CustomField>,
 }
 
 /// Normalize tags: trim, drop blanks, and de-duplicate while preserving order.
@@ -96,6 +217,7 @@ pub struct EntryFull {
     pub password_expiry_days: Option<u32>,
     /// When this password is next due for rotation, or `None` with no reminder.
     pub password_due_at: Option<String>,
+    pub fields: Vec<CustomField>,
 }
 
 fn validate_input(input: &EntryInput) -> Result<(), AppError> {
@@ -112,6 +234,7 @@ fn validate_input(input: &EntryInput) -> Result<(), AppError> {
             ));
         }
     }
+    normalize_fields(&input.fields)?;
     Ok(())
 }
 
@@ -204,8 +327,12 @@ fn create_entry_impl(state: &AppState, input: EntryInput) -> Result<i64, AppErro
             _ => (None, None),
         };
         let tags = tags_to_json(&normalize_tags(&input.tags));
+        let fields = normalize_fields(&input.fields)?;
         let now = now_iso8601();
-        s.conn.execute(
+        // One transaction with the field rows: a half-created entry that lost
+        // its custom fields would be silent data loss at create time.
+        let tx = s.conn.transaction()?;
+        tx.execute(
             "INSERT INTO password_entries
                 (category_id, title, username, url_or_app_name,
                  encrypted_password, password_nonce,
@@ -232,7 +359,10 @@ fn create_entry_impl(state: &AppState, input: EntryInput) -> Result<i64, AppErro
                 now,
             ],
         )?;
-        Ok(s.conn.last_insert_rowid())
+        let id = tx.last_insert_rowid();
+        write_fields(&tx, key, id, &fields)?;
+        tx.commit()?;
+        Ok(id)
     })
 }
 
@@ -351,6 +481,8 @@ fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
             _ => None,
         };
 
+        let fields = read_fields(&s.conn, key, row.id)?;
+
         let now = now_iso8601();
         s.conn.execute(
             "UPDATE password_entries SET last_used_at = ?1 WHERE id = ?2",
@@ -376,6 +508,7 @@ fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
                 row.password_changed_at.as_deref(),
                 row.password_expiry_days,
             ),
+            fields,
         })
     })
 }
@@ -387,6 +520,7 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
         let pw_ct = crypto::encrypt(key, input.password.as_bytes())?;
         let (notes_bytes, notes_nonce) = encrypt_optional(key, input.notes.as_deref())?;
         let tags = tags_to_json(&normalize_tags(&input.tags));
+        let fields = normalize_fields(&input.fields)?;
         let now = now_iso8601();
 
         // The field write and the TOTP write share one transaction so a failure
@@ -467,6 +601,7 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
                 )?;
             }
         }
+        write_fields(&tx, key, id, &fields)?;
         tx.commit()?;
         Ok(())
     })
@@ -838,6 +973,7 @@ mod tests {
             favorite: false,
             tags: vec![],
             password_expiry_days: None,
+            fields: vec![],
         }
     }
 
@@ -1284,6 +1420,7 @@ mod tests {
                 favorite: false,
                 tags: vec![],
                 password_expiry_days: None,
+                fields: vec![],
             },
         )
         .unwrap();
@@ -1595,6 +1732,247 @@ mod tests {
         let full = get_entry_impl(&state, id).unwrap();
         assert!(full.favorite);
         assert_eq!(full.tags, vec!["banking".to_string()]);
+    }
+
+    // --- Custom fields ---
+
+    fn field(label: &str, value: &str) -> CustomField {
+        CustomField {
+            label: label.into(),
+            value: value.into(),
+            secret: true,
+        }
+    }
+
+    #[test]
+    fn custom_fields_round_trip_through_create_and_read() {
+        let state = unlocked_state();
+        let id = create_entry_impl(
+            &state,
+            EntryInput {
+                fields: vec![
+                    field("Recovery code", "abc-123"),
+                    CustomField {
+                        secret: false,
+                        ..field("Support PIN", "4242")
+                    },
+                ],
+                ..sample_input()
+            },
+        )
+        .unwrap();
+
+        let full = get_entry_impl(&state, id).unwrap();
+        assert_eq!(full.fields.len(), 2);
+        assert_eq!(full.fields[0].label, "Recovery code");
+        assert_eq!(full.fields[0].value, "abc-123");
+        assert!(full.fields[0].secret);
+        assert_eq!(full.fields[1].label, "Support PIN");
+        assert!(!full.fields[1].secret);
+    }
+
+    #[test]
+    fn field_values_are_encrypted_at_rest() {
+        let state = unlocked_state();
+        create_entry_impl(
+            &state,
+            EntryInput {
+                fields: vec![field("Recovery code", "super-secret-value")],
+                ..sample_input()
+            },
+        )
+        .unwrap();
+
+        let stored: Vec<u8> = state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row("SELECT encrypted_value FROM entry_fields", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&stored).contains("super-secret-value"),
+            "the value must not be readable in the database"
+        );
+    }
+
+    #[test]
+    fn an_update_replaces_the_field_set_rather_than_appending_to_it() {
+        let state = unlocked_state();
+        let id = create_entry_impl(
+            &state,
+            EntryInput {
+                fields: vec![field("A", "1"), field("B", "2")],
+                ..sample_input()
+            },
+        )
+        .unwrap();
+
+        update_entry_impl(
+            &state,
+            id,
+            EntryInput {
+                fields: vec![field("B", "changed"), field("C", "3")],
+                ..sample_input()
+            },
+        )
+        .unwrap();
+
+        let full = get_entry_impl(&state, id).unwrap();
+        let labels: Vec<&str> = full.fields.iter().map(|f| f.label.as_str()).collect();
+        // Order follows the submitted order, and the removed field is gone.
+        assert_eq!(labels, vec!["B", "C"]);
+        assert_eq!(full.fields[0].value, "changed");
+        let rows: i64 = state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row("SELECT COUNT(*) FROM entry_fields", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 2, "the replaced rows must not linger");
+    }
+
+    #[test]
+    fn a_blank_field_row_is_dropped_rather_than_rejected() {
+        // An untouched "add a field" line in the form arrives blank; discarding
+        // it is ordinary input handling, not an error to show the user.
+        let state = unlocked_state();
+        let id = create_entry_impl(
+            &state,
+            EntryInput {
+                fields: vec![field("Kept", "v"), field("", "")],
+                ..sample_input()
+            },
+        )
+        .unwrap();
+        let full = get_entry_impl(&state, id).unwrap();
+        assert_eq!(full.fields.len(), 1);
+        assert_eq!(full.fields[0].label, "Kept");
+    }
+
+    #[test]
+    fn a_field_with_a_value_but_no_label_is_refused() {
+        let state = unlocked_state();
+        assert!(matches!(
+            create_entry_impl(
+                &state,
+                EntryInput {
+                    fields: vec![field("   ", "orphaned value")],
+                    ..sample_input()
+                },
+            ),
+            Err(AppError::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn field_bounds_are_counted_in_characters() {
+        let state = unlocked_state();
+        // Same reason as category names and the master password: `len()` would
+        // let a multi-byte label past a limit meant to count characters.
+        let long_label = "é".repeat(MAX_FIELD_LABEL_CHARS + 1);
+        assert!(matches!(
+            create_entry_impl(
+                &state,
+                EntryInput {
+                    fields: vec![field(&long_label, "v")],
+                    ..sample_input()
+                },
+            ),
+            Err(AppError::Validation(_))
+        ));
+        let at_limit = "é".repeat(MAX_FIELD_LABEL_CHARS);
+        assert!(create_entry_impl(
+            &state,
+            EntryInput {
+                fields: vec![field(&at_limit, "v")],
+                ..sample_input()
+            },
+        )
+        .is_ok());
+
+        let too_many: Vec<CustomField> = (0..=MAX_FIELDS_PER_ENTRY)
+            .map(|i| field(&format!("f{i}"), "v"))
+            .collect();
+        assert!(matches!(
+            create_entry_impl(
+                &state,
+                EntryInput {
+                    fields: too_many,
+                    ..sample_input()
+                },
+            ),
+            Err(AppError::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn a_rejected_field_rolls_back_the_whole_write() {
+        // Validation runs before the row is written on create; on update the
+        // field write shares the entry's transaction, so a late failure must
+        // not leave the entry half-edited.
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        let before = get_entry_impl(&state, id).unwrap();
+
+        assert!(update_entry_impl(
+            &state,
+            id,
+            EntryInput {
+                title: "Renamed".into(),
+                fields: vec![field("", "orphaned")],
+                ..sample_input()
+            },
+        )
+        .is_err());
+
+        let after = get_entry_impl(&state, id).unwrap();
+        assert_eq!(after.title, before.title, "the rename must not have landed");
+        assert!(after.fields.is_empty());
+    }
+
+    #[test]
+    fn purging_an_entry_takes_its_custom_fields_with_it() {
+        let state = unlocked_state();
+        let id = create_entry_impl(
+            &state,
+            EntryInput {
+                fields: vec![field("Recovery code", "abc-123")],
+                ..sample_input()
+            },
+        )
+        .unwrap();
+        delete_entry_impl(&state, id).unwrap();
+        purge_entry_impl(&state, id).unwrap();
+
+        let rows: i64 = state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row("SELECT COUNT(*) FROM entry_fields", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "fields must cascade with the purged entry");
+    }
+
+    #[test]
+    fn a_restored_entry_still_has_its_fields() {
+        let state = unlocked_state();
+        let id = create_entry_impl(
+            &state,
+            EntryInput {
+                fields: vec![field("Recovery code", "abc-123")],
+                ..sample_input()
+            },
+        )
+        .unwrap();
+        delete_entry_impl(&state, id).unwrap();
+        restore_entry_impl(&state, id).unwrap();
+
+        let full = get_entry_impl(&state, id).unwrap();
+        assert_eq!(full.fields.len(), 1);
+        assert_eq!(full.fields[0].value, "abc-123");
     }
 
     // --- Bulk actions ---
