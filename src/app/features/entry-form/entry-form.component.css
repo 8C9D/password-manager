@@ -123,3 +123,10 @@ select:focus {
 .add-field {
   display: flex;
 }
+/* Advisory, not an error: reuse never blocks the save, so it must not read
+   like the red validation messages that do. */
+.reuse-warning {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--warning);
+}

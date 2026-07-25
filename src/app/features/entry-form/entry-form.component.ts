@@ -8,6 +8,7 @@ import { Category } from '../../core/models/category.model';
 import { CustomField, EntryInput } from '../../core/models/entry.model';
 import { CategoryService } from '../../core/services/category.service';
 import {
+  describeReuse,
   parseExpiryDays,
   parseTagsInput,
   PasswordEntryService,
@@ -67,6 +68,9 @@ export class EntryFormComponent {
   protected readonly categories = signal<Category[]>([]);
   protected readonly editingId = signal<number | null>(null);
   protected readonly duplicating = signal(false);
+  // Advisory only: reuse never blocks a save, it just says so before the
+  // password becomes a health-scan finding later.
+  protected readonly reuseWarning = signal<string | null>(null);
 
   protected isEdit = () => this.editingId() !== null;
   protected cancelLink = () => {
@@ -113,6 +117,8 @@ export class EntryFormComponent {
     this.passwordTouched.set(false);
     this.editingId.set(null);
     this.duplicating.set(false);
+    this.reuseWarning.set(null);
+    this.reuseSeq++;
   }
 
   private async load(idParam: string | null, duplicateParam: string | null): Promise<void> {
@@ -168,6 +174,32 @@ export class EntryFormComponent {
     }
   }
 
+  // Bumped per check so a slow answer about an old password cannot land under
+  // a newer one the user has since typed.
+  private reuseSeq = 0;
+
+  /**
+   * Ask the backend whether this password is already in use. Advisory, so a
+   * failure is swallowed: a warning that could not be computed must not turn
+   * into an error banner over a perfectly valid entry.
+   */
+  protected async checkReuse(): Promise<void> {
+    const seq = ++this.reuseSeq;
+    const password = this.password;
+    if (password === '') {
+      this.reuseWarning.set(null);
+      return;
+    }
+    try {
+      const count = await this.entries.countPasswordReuse(password, this.editingId());
+      if (seq !== this.reuseSeq) return;
+      this.reuseWarning.set(describeReuse(count));
+    } catch {
+      if (seq !== this.reuseSeq) return;
+      this.reuseWarning.set(null);
+    }
+  }
+
   protected addField(): void {
     this.fields = [...this.fields, { label: '', value: '', secret: true }];
   }
@@ -192,6 +224,7 @@ export class EntryFormComponent {
     this.password = pw;
     this.passwordTouched.set(true);
     this.showGenerator.set(false);
+    void this.checkReuse();
   }
 
   protected async onSubmit(): Promise<void> {

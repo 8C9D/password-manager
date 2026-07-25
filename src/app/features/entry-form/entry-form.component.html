@@ -78,6 +78,7 @@
             [type]="showPassword() ? 'text' : 'password'"
             name="password"
             [(ngModel)]="password"
+            (blur)="checkReuse()"
             autocomplete="new-password"
             required
           />
@@ -90,6 +91,9 @@
         </div>
       </label>
       <app-password-strength-meter [password]="password" />
+      @if (reuseWarning(); as warning) {
+        <p class="reuse-warning" role="status">{{ warning }}</p>
+      }
       @if (passwordTouched() && password === '') {
         <p class="warn">Password is required.</p>
       }

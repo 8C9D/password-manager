@@ -49,6 +49,7 @@ pub fn run() {
             commands::entries::set_entries_favorite,
             commands::entries::delete_entries,
             commands::health::audit_vault,
+            commands::health::count_password_reuse,
             commands::history::list_password_history,
             commands::history::clear_password_history,
             commands::categories::list_categories,

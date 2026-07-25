@@ -13,6 +13,7 @@ import {
   sortEntries,
   totpActionFrom,
   validateEntryInput,
+  describeReuse,
 } from './password-entry.service';
 
 function makeEntry(overrides: Partial<EntrySummary>): EntrySummary {
@@ -329,5 +330,21 @@ describe('describeDue', () => {
 
   it('reports nothing for an unparseable date rather than a wrong countdown', () => {
     expect(describeDue('not a date', now)).toBeNull();
+  });
+});
+
+describe('describeReuse', () => {
+  it('says nothing when the password is unique', () => {
+    // A reassuring "used by 0 others" line would be noise on every save.
+    expect(describeReuse(0)).toBeNull();
+    expect(describeReuse(-1)).toBeNull();
+  });
+
+  it('uses the singular for a single other entry', () => {
+    expect(describeReuse(1)).toBe('This password is already used by 1 other entry.');
+  });
+
+  it('uses the plural beyond that', () => {
+    expect(describeReuse(3)).toBe('This password is already used by 3 other entries.');
   });
 });

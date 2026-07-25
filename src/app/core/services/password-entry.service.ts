@@ -78,6 +78,14 @@ export class PasswordEntryService {
     return call<VaultHealth>('audit_vault');
   }
 
+  /**
+   * How many other live entries already use this password. A count, not a list:
+   * the backend deliberately does not say which accounts share it.
+   */
+  async countPasswordReuse(password: string, excludeId: number | null): Promise<number> {
+    return call<number>('count_password_reuse', { password, excludeId });
+  }
+
   async setFavorite(id: number, favorite: boolean): Promise<void> {
     await call<void>('set_favorite', { id, favorite });
     await this.list();
@@ -254,6 +262,17 @@ export function describeIssue(issue: EntryIssue): string[] {
   if (issue.stale) labels.push('Old');
   if (issue.due) labels.push('Due');
   return labels;
+}
+
+/**
+ * How a reuse warning should read. Returns null when the password is unique,
+ * so the form shows nothing rather than a reassuring "0 others" line.
+ */
+export function describeReuse(count: number): string | null {
+  if (count <= 0) return null;
+  return count === 1
+    ? 'This password is already used by 1 other entry.'
+    : `This password is already used by ${count} other entries.`;
 }
 
 export interface EntryValidationResult {

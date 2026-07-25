@@ -35,6 +35,7 @@ export type TauriCommand =
   | 'set_entries_favorite'
   | 'delete_entries'
   | 'audit_vault'
+  | 'count_password_reuse'
   | 'list_password_history'
   | 'clear_password_history'
   | 'list_categories'

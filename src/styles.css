@@ -15,6 +15,9 @@
   --accent-soft: #e5edff;
   --accent-strong: #1e40af;
   --danger: #b91c1c;
+  /* An advisory that is not an error: the password-reuse notice warns without
+     blocking the save, so it must not read like the red validation messages. */
+  --warning: #92580a;
   /* Text drawn on top of an --accent fill. The dark theme's accent is a light
      blue, so white on it fails contrast; it needs dark text instead. */
   --on-accent: #ffffff;
@@ -35,6 +38,7 @@
     --accent-soft: #1f2a47;
     --accent-strong: #c8d8ff;
     --danger: #ff8080;
+    --warning: #f0b429;
     --on-accent: #10131a;
     --favorite: #ffc63d;
     color-scheme: dark;
@@ -52,6 +56,7 @@
   --accent-soft: #1f2a47;
   --accent-strong: #c8d8ff;
   --danger: #ff8080;
+  --warning: #f0b429;
   --on-accent: #10131a;
   --favorite: #ffc63d;
   color-scheme: dark;

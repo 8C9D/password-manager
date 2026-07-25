@@ -196,6 +196,59 @@ pub fn audit_vault(state: State<'_, AppState>) -> Result<VaultHealth, AppError> 
     audit_vault_impl(&state)
 }
 
+/// How many *other* live entries already use this password.
+///
+/// Deliberately a count and not a list: the entry form asks this about a
+/// password the user is in the middle of typing, and naming the accounts that
+/// share it would put a set of secrets on screen that the user did not ask to
+/// see. `exclude_id` is the entry being edited, so re-saving an entry unchanged
+/// never reports itself as reuse.
+fn count_password_reuse_impl(
+    state: &AppState,
+    password: &str,
+    exclude_id: Option<i64>,
+) -> Result<usize, AppError> {
+    if password.is_empty() {
+        return Ok(0);
+    }
+    with_unlocked(state, |s, key| {
+        let candidate: [u8; 32] = Sha256::digest(password.as_bytes()).into();
+        let mut stmt = s.conn.prepare(
+            "SELECT id, encrypted_password, password_nonce
+             FROM password_entries
+             WHERE deleted_at IS NULL",
+        )?;
+        type Raw = (i64, Vec<u8>, Vec<u8>);
+        let rows: Vec<Raw> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        let mut count = 0usize;
+        for (id, enc, nonce) in rows {
+            if Some(id) == exclude_id {
+                continue;
+            }
+            let pw = Zeroizing::new(crypto::decrypt(key, &enc, &nonce)?);
+            let hash: [u8; 32] = Sha256::digest(pw.as_slice()).into();
+            if hash == candidate {
+                count += 1;
+            }
+        }
+        Ok(count)
+    })
+}
+
+#[tauri::command]
+pub fn count_password_reuse(
+    state: State<'_, AppState>,
+    password: String,
+    exclude_id: Option<i64>,
+) -> Result<usize, AppError> {
+    let password = Zeroizing::new(password);
+    count_password_reuse_impl(&state, &password, exclude_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,6 +485,84 @@ mod tests {
         let health = audit_vault_impl(&state).unwrap();
         assert_eq!(health.total, 0);
         assert!(health.issues.is_empty());
+    }
+
+    #[test]
+    fn reuse_count_finds_other_entries_sharing_a_password() {
+        let state = unlocked_state();
+        insert_entry(&state, "Alpha", "shared-password", "2026-07-01T00:00:00Z");
+        insert_entry(&state, "Beta", "shared-password", "2026-07-01T00:00:00Z");
+        insert_entry(&state, "Gamma", "unique-password", "2026-07-01T00:00:00Z");
+
+        assert_eq!(
+            count_password_reuse_impl(&state, "shared-password", None).unwrap(),
+            2
+        );
+        assert_eq!(
+            count_password_reuse_impl(&state, "unique-password", None).unwrap(),
+            1
+        );
+        assert_eq!(
+            count_password_reuse_impl(&state, "never-used", None).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn an_entry_being_edited_does_not_count_as_reusing_its_own_password() {
+        let state = unlocked_state();
+        insert_entry(&state, "Alpha", "shared-password", "2026-07-01T00:00:00Z");
+        let id: i64 = state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row(
+                "SELECT id FROM password_entries WHERE title = 'Alpha'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // Re-saving an entry unchanged must not warn the user about itself.
+        assert_eq!(
+            count_password_reuse_impl(&state, "shared-password", Some(id)).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn reuse_ignores_trashed_entries_and_an_empty_candidate() {
+        let state = unlocked_state();
+        insert_entry(&state, "Live", "shared-password", "2026-07-01T00:00:00Z");
+        insert_entry(&state, "Trashed", "shared-password", "2026-07-01T00:00:00Z");
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries SET deleted_at = '2026-07-02T00:00:00Z'
+                 WHERE title = 'Trashed'",
+                [],
+            )
+            .unwrap();
+
+        assert_eq!(
+            count_password_reuse_impl(&state, "shared-password", None).unwrap(),
+            1,
+            "a password only still used by a trashed entry is not in use"
+        );
+        // An empty field is not a reused password; it must not sweep the vault.
+        assert_eq!(count_password_reuse_impl(&state, "", None).unwrap(), 0);
+    }
+
+    #[test]
+    fn reuse_count_requires_an_unlocked_vault() {
+        let state = AppState::new(db::open_in_memory().unwrap());
+        assert!(matches!(
+            count_password_reuse_impl(&state, "x", None),
+            Err(AppError::Locked)
+        ));
     }
 
     #[test]
