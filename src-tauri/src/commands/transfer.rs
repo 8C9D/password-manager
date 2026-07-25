@@ -754,6 +754,18 @@ const NOTES_ALIASES: &[&str] = &["notes", "note"];
 const CATEGORY_ALIASES: &[&str] = &["folder", "category", "grouping"];
 const TOTP_ALIASES: &[&str] = &["login_totp", "otpauth", "totp", "one-time password", "otp"];
 const FAVORITE_ALIASES: &[&str] = &["favorite", "favourite", "fav"];
+const TAGS_ALIASES: &[&str] = &["tags", "tag", "labels"];
+
+/// Split a CSV tags cell on commas, the convention `build_csv` writes and the
+/// one 1Password-style exports use.
+///
+/// A tag containing a comma therefore arrives as two tags; the cell has no way
+/// to distinguish them, and the alternative (dropping the column) loses more.
+fn parse_tags_cell(cell: &str) -> Vec<String> {
+    crate::commands::entries::normalize_tags(
+        &cell.split(',').map(|t| t.to_string()).collect::<Vec<_>>(),
+    )
+}
 
 fn find_col(headers: &[String], aliases: &[&str]) -> Option<usize> {
     headers.iter().position(|h| aliases.contains(&h.as_str()))
@@ -796,6 +808,7 @@ fn import_csv_content_impl(state: &AppState, csv: &str) -> Result<CsvImportSumma
     let c_cat = find_col(&headers, CATEGORY_ALIASES);
     let c_totp = find_col(&headers, TOTP_ALIASES);
     let c_fav = find_col(&headers, FAVORITE_ALIASES);
+    let c_tags = find_col(&headers, TAGS_ALIASES);
 
     let data: Vec<&Vec<String>> = rows.collect();
 
@@ -835,6 +848,7 @@ fn import_csv_content_impl(state: &AppState, csv: &str) -> Result<CsvImportSumma
             let notes = cell(row, c_notes);
             let category = cell(row, c_cat).trim();
             let is_favorite = is_truthy(cell(row, c_fav));
+            let tags = crate::commands::entries::tags_to_json(&parse_tags_cell(cell(row, c_tags)));
 
             let pw_ct = crypto::encrypt(key, password.as_bytes())?;
             let (notes_bytes, notes_nonce) = if notes.trim().is_empty() {
@@ -898,9 +912,9 @@ fn import_csv_content_impl(state: &AppState, csv: &str) -> Result<CsvImportSumma
                      encrypted_password, password_nonce,
                      encrypted_notes, notes_nonce,
                      encrypted_totp, totp_nonce,
-                     created_at, updated_at, last_used_at, is_favorite,
+                     created_at, updated_at, last_used_at, is_favorite, tags,
                      password_changed_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, NULL, ?12, ?11)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, NULL, ?12, ?13, ?11)",
                 rusqlite::params![
                     category_id,
                     title,
@@ -914,6 +928,7 @@ fn import_csv_content_impl(state: &AppState, csv: &str) -> Result<CsvImportSumma
                     totp_nonce,
                     now,
                     is_favorite,
+                    tags,
                 ],
             )?;
             imported += 1;
@@ -1337,6 +1352,52 @@ mod tests {
                     Some("Work".to_string()),
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn export_csv_round_trips_favorites_and_tags() {
+        // The CSV writer emits `favorite` and `tags` columns, so the reader has
+        // to understand them: otherwise our own export silently drops both on
+        // the way back in.
+        let source = state_with_vault(PW);
+        add_entry(&source, "Email", "pw", None, None);
+        source
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries
+                 SET is_favorite = 1, tags = '[\"work\",\"2fa\"]'
+                 WHERE title = 'Email'",
+                [],
+            )
+            .unwrap();
+
+        let file = TempFile::new("export-tags.csv");
+        export_csv_impl(&source, PW.into(), &file.0).unwrap();
+        let csv = std::fs::read_to_string(&file.0).unwrap();
+
+        let target = state_with_vault(PW);
+        import_csv_content_impl(&target, &csv).unwrap();
+
+        let (favorite, tags): (bool, String) = target
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row(
+                "SELECT is_favorite, tags FROM password_entries WHERE title = 'Email'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(favorite, "favorite must survive a CSV round trip");
+        assert_eq!(
+            crate::commands::entries::tags_from_json(&tags),
+            vec!["work".to_string(), "2fa".to_string()],
+            "tags must survive a CSV round trip"
         );
     }
 
