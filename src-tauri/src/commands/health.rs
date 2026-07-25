@@ -99,6 +99,7 @@ fn audit_vault_impl(state: &AppState) -> Result<VaultHealth, AppError> {
             "SELECT id, title, encrypted_password, password_nonce,
                     COALESCE(password_changed_at, updated_at)
              FROM password_entries
+             WHERE deleted_at IS NULL
              ORDER BY title COLLATE NOCASE ASC",
         )?;
         type Raw = (i64, String, Vec<u8>, Vec<u8>, String);
@@ -207,6 +208,53 @@ mod tests {
                 rusqlite::params![title, ct.bytes, ct.nonce.as_slice(), updated_at],
             )
             .unwrap();
+    }
+
+    #[test]
+    fn audit_ignores_trashed_entries() {
+        // A password sitting in the trash is on its way out; nagging about it,
+        // or counting it as the second use of a "reused" password, is noise.
+        let state = unlocked_state();
+        insert_entry(&state, "Live", "aVeryStrongPassword1!", "2026-07-01T00:00:00Z");
+        insert_entry(&state, "Trashed", "weak", "2026-07-01T00:00:00Z");
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries SET deleted_at = '2026-07-02T00:00:00Z'
+                 WHERE title = 'Trashed'",
+                [],
+            )
+            .unwrap();
+
+        let health = audit_vault_impl(&state).unwrap();
+        assert_eq!(health.total, 1);
+        assert_eq!(health.weak_count, 0);
+        assert!(health.issues.is_empty());
+    }
+
+    #[test]
+    fn audit_does_not_count_a_trashed_twin_as_password_reuse() {
+        let state = unlocked_state();
+        insert_entry(&state, "Live", "aVeryStrongPassword1!", "2026-07-01T00:00:00Z");
+        insert_entry(&state, "Trashed", "aVeryStrongPassword1!", "2026-07-01T00:00:00Z");
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries SET deleted_at = '2026-07-02T00:00:00Z'
+                 WHERE title = 'Trashed'",
+                [],
+            )
+            .unwrap();
+
+        let health = audit_vault_impl(&state).unwrap();
+        assert_eq!(health.reused_count, 0);
+        assert!(health.issues.is_empty());
     }
 
     #[test]

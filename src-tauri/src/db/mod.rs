@@ -50,6 +50,13 @@ const MIGRATIONS: &[Migration] = &[
               );
               CREATE INDEX idx_history_entry ON password_history(entry_id, id DESC);",
     },
+    Migration {
+        version: 5,
+        // Soft delete. NULL means live; a timestamp means the entry is in the
+        // trash, still fully encrypted and restorable until it is purged.
+        sql: "ALTER TABLE password_entries ADD COLUMN deleted_at TEXT;
+              CREATE INDEX idx_entries_deleted ON password_entries(deleted_at);",
+    },
 ];
 
 #[cfg(test)]

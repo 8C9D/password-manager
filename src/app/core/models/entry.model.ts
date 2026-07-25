@@ -45,6 +45,15 @@ export interface EntryInput {
   tags?: string[];
 }
 
+/** An entry sitting in the trash: restorable until it is purged. */
+export interface DeletedEntry {
+  id: number;
+  title: string;
+  username: string;
+  urlOrAppName: string;
+  deletedAt: string;
+}
+
 export interface PasswordHistoryItem {
   id: number;
   password: string;

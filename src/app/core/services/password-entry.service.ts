@@ -1,6 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 
 import {
+  DeletedEntry,
   EntryFull,
   EntryInput,
   EntryIssue,
@@ -38,9 +39,27 @@ export class PasswordEntryService {
     await this.list();
   }
 
+  /** Move an entry to the trash. `purge` is what destroys it. */
   async remove(id: number): Promise<void> {
     await call<void>('delete_entry', { id });
     await this.list();
+  }
+
+  async listDeleted(): Promise<DeletedEntry[]> {
+    return call<DeletedEntry[]>('list_deleted_entries');
+  }
+
+  async restore(id: number): Promise<void> {
+    await call<void>('restore_entry', { id });
+    await this.list();
+  }
+
+  async purge(id: number): Promise<void> {
+    await call<void>('purge_entry', { id });
+  }
+
+  async purgeAll(): Promise<number> {
+    return call<number>('purge_all_entries');
   }
 
   async generateTotp(id: number): Promise<GeneratedTotp> {

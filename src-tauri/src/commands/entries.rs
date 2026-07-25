@@ -179,6 +179,7 @@ fn list_entries_impl(state: &AppState) -> Result<Vec<EntrySummary>, AppError> {
             "SELECT id, category_id, title, username, url_or_app_name,
                     created_at, updated_at, last_used_at, is_favorite, tags
              FROM password_entries
+             WHERE deleted_at IS NULL
              ORDER BY title COLLATE NOCASE ASC",
         )?;
         let rows = stmt
@@ -242,7 +243,7 @@ fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
                         created_at, updated_at,
                         encrypted_totp IS NOT NULL,
                         is_favorite, tags
-                 FROM password_entries WHERE id = ?1",
+                 FROM password_entries WHERE id = ?1 AND deleted_at IS NULL",
                 [id],
                 |r| {
                     Ok(EntryRow {
@@ -324,7 +325,8 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
         // a rotation from a title rename - compare plaintexts instead.
         let existing: Option<(Vec<u8>, Vec<u8>)> = tx
             .query_row(
-                "SELECT encrypted_password, password_nonce FROM password_entries WHERE id = ?1",
+                "SELECT encrypted_password, password_nonce FROM password_entries
+                 WHERE id = ?1 AND deleted_at IS NULL",
                 [id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
@@ -404,7 +406,8 @@ fn generate_totp_at(
         let row: Option<OptionalCiphertext> = s
             .conn
             .query_row(
-                "SELECT encrypted_totp, totp_nonce FROM password_entries WHERE id = ?1",
+                "SELECT encrypted_totp, totp_nonce FROM password_entries
+                 WHERE id = ?1 AND deleted_at IS NULL",
                 [id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
@@ -425,10 +428,33 @@ fn generate_totp_impl(state: &AppState, id: i64) -> Result<GeneratedTotp, AppErr
     generate_totp_at(state, id, now_unix())
 }
 
+/// Move an entry to the trash.
+///
+/// Deleting a password is unrecoverable in a way almost nothing else in this
+/// app is, and a misclick in a list is easy. The row keeps its ciphertext and
+/// its history and only stops appearing in the vault; `purge_entry` is what
+/// actually destroys it.
 fn delete_entry_impl(state: &AppState, id: i64) -> Result<(), AppError> {
-    with_unlocked(state, |s, _key| {
+    with_authorized(state, |s| {
         let n = s.conn.execute(
-            "DELETE FROM password_entries WHERE id = ?1",
+            "UPDATE password_entries SET deleted_at = ?1
+             WHERE id = ?2 AND deleted_at IS NULL",
+            rusqlite::params![now_iso8601(), id],
+        )?;
+        if n == 0 {
+            return Err(AppError::EntryNotFound);
+        }
+        Ok(())
+    })
+}
+
+/// Put a trashed entry back into the vault. Idempotent only in the sense that
+/// restoring something that is not in the trash reports it as not found.
+fn restore_entry_impl(state: &AppState, id: i64) -> Result<(), AppError> {
+    with_authorized(state, |s| {
+        let n = s.conn.execute(
+            "UPDATE password_entries SET deleted_at = NULL
+             WHERE id = ?1 AND deleted_at IS NOT NULL",
             rusqlite::params![id],
         )?;
         if n == 0 {
@@ -436,6 +462,87 @@ fn delete_entry_impl(state: &AppState, id: i64) -> Result<(), AppError> {
         }
         Ok(())
     })
+}
+
+/// Permanently destroy one trashed entry, and the retained previous passwords
+/// that cascade from it. Refuses to touch a live entry, so the only route to
+/// permanent deletion runs through the trash.
+fn purge_entry_impl(state: &AppState, id: i64) -> Result<(), AppError> {
+    with_authorized(state, |s| {
+        let n = s.conn.execute(
+            "DELETE FROM password_entries WHERE id = ?1 AND deleted_at IS NOT NULL",
+            rusqlite::params![id],
+        )?;
+        if n == 0 {
+            return Err(AppError::EntryNotFound);
+        }
+        Ok(())
+    })
+}
+
+/// Empty the trash, returning how many entries were destroyed.
+fn purge_all_entries_impl(state: &AppState) -> Result<usize, AppError> {
+    with_authorized(state, |s| {
+        let n = s
+            .conn
+            .execute("DELETE FROM password_entries WHERE deleted_at IS NOT NULL", [])?;
+        Ok(n)
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletedEntry {
+    pub id: i64,
+    pub title: String,
+    pub username: String,
+    pub url_or_app_name: String,
+    pub deleted_at: String,
+}
+
+fn list_deleted_entries_impl(state: &AppState) -> Result<Vec<DeletedEntry>, AppError> {
+    with_authorized(state, |s| {
+        let mut stmt = s.conn.prepare(
+            "SELECT id, title, username, url_or_app_name, deleted_at
+             FROM password_entries
+             WHERE deleted_at IS NOT NULL
+             ORDER BY deleted_at DESC, title COLLATE NOCASE ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(DeletedEntry {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    username: r.get(2)?,
+                    url_or_app_name: r.get(3)?,
+                    deleted_at: r.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+}
+
+#[tauri::command]
+pub fn restore_entry(state: State<'_, AppState>, id: i64) -> Result<(), AppError> {
+    restore_entry_impl(&state, id)
+}
+
+#[tauri::command]
+pub fn purge_entry(state: State<'_, AppState>, id: i64) -> Result<(), AppError> {
+    purge_entry_impl(&state, id)
+}
+
+#[tauri::command]
+pub fn purge_all_entries(state: State<'_, AppState>) -> Result<usize, AppError> {
+    purge_all_entries_impl(&state)
+}
+
+#[tauri::command]
+pub fn list_deleted_entries(
+    state: State<'_, AppState>,
+) -> Result<Vec<DeletedEntry>, AppError> {
+    list_deleted_entries_impl(&state)
 }
 
 #[tauri::command]
@@ -465,7 +572,8 @@ pub fn generate_totp(state: State<'_, AppState>, id: i64) -> Result<GeneratedTot
 fn set_favorite_impl(state: &AppState, id: i64, favorite: bool) -> Result<(), AppError> {
     with_authorized(state, |s| {
         let n = s.conn.execute(
-            "UPDATE password_entries SET is_favorite = ?1 WHERE id = ?2",
+            "UPDATE password_entries SET is_favorite = ?1
+             WHERE id = ?2 AND deleted_at IS NULL",
             rusqlite::params![favorite, id],
         )?;
         if n == 0 {
@@ -543,6 +651,157 @@ mod tests {
 
     // RFC 6238 SHA1 seed, base32-encoded; code at t=59 is 287082 (6-digit).
     const RFC_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+    #[test]
+    fn delete_moves_an_entry_to_the_trash_instead_of_destroying_it() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+
+        delete_entry_impl(&state, id).unwrap();
+
+        // Gone from the vault...
+        assert!(list_entries_impl(&state).unwrap().is_empty());
+        assert!(matches!(
+            get_entry_impl(&state, id),
+            Err(AppError::EntryNotFound)
+        ));
+        // ...but still there, and still restorable.
+        let trashed = list_deleted_entries_impl(&state).unwrap();
+        assert_eq!(trashed.len(), 1);
+        assert_eq!(trashed[0].id, id);
+        assert_eq!(trashed[0].title, "GitHub");
+        assert!(!trashed[0].deleted_at.is_empty());
+    }
+
+    #[test]
+    fn restore_brings_an_entry_back_with_its_secrets_intact() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        delete_entry_impl(&state, id).unwrap();
+
+        restore_entry_impl(&state, id).unwrap();
+
+        assert_eq!(list_entries_impl(&state).unwrap().len(), 1);
+        assert!(list_deleted_entries_impl(&state).unwrap().is_empty());
+        let full = get_entry_impl(&state, id).unwrap();
+        assert_eq!(full.password, "hunter2");
+        assert_eq!(full.notes.as_deref(), Some("the cake is a lie"));
+    }
+
+    #[test]
+    fn purge_destroys_a_trashed_entry_but_refuses_a_live_one() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+
+        // Permanent deletion must only be reachable through the trash.
+        assert!(matches!(
+            purge_entry_impl(&state, id),
+            Err(AppError::EntryNotFound)
+        ));
+        assert_eq!(list_entries_impl(&state).unwrap().len(), 1);
+
+        delete_entry_impl(&state, id).unwrap();
+        purge_entry_impl(&state, id).unwrap();
+        assert!(list_deleted_entries_impl(&state).unwrap().is_empty());
+        let count: i64 = state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row("SELECT COUNT(*) FROM password_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn purging_an_entry_takes_its_password_history_with_it() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        let mut rotated = sample_input();
+        rotated.password = "brand-new-password".into();
+        update_entry_impl(&state, id, rotated).unwrap();
+
+        let history_count = |state: &AppState| -> i64 {
+            state
+                .inner
+                .lock()
+                .unwrap()
+                .conn
+                .query_row("SELECT COUNT(*) FROM password_history", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(history_count(&state), 1);
+
+        // Trashing keeps the retired secrets (the entry may come back)...
+        delete_entry_impl(&state, id).unwrap();
+        assert_eq!(history_count(&state), 1);
+        // ...purging must not leave them behind.
+        purge_entry_impl(&state, id).unwrap();
+        assert_eq!(history_count(&state), 0);
+    }
+
+    #[test]
+    fn empty_trash_purges_only_trashed_entries() {
+        let state = unlocked_state();
+        let keep = create_entry_impl(&state, sample_input()).unwrap();
+        let mut second = sample_input();
+        second.title = "Bank".into();
+        let toss = create_entry_impl(&state, second).unwrap();
+        delete_entry_impl(&state, toss).unwrap();
+
+        assert_eq!(purge_all_entries_impl(&state).unwrap(), 1);
+        assert!(list_deleted_entries_impl(&state).unwrap().is_empty());
+        let remaining = list_entries_impl(&state).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, keep);
+    }
+
+    #[test]
+    fn a_trashed_entry_cannot_be_edited_favorited_or_deleted_again() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        delete_entry_impl(&state, id).unwrap();
+
+        assert!(matches!(
+            update_entry_impl(&state, id, sample_input()),
+            Err(AppError::EntryNotFound)
+        ));
+        assert!(matches!(
+            set_favorite_impl(&state, id, true),
+            Err(AppError::EntryNotFound)
+        ));
+        // Deleting twice must not silently re-stamp the deletion time.
+        assert!(matches!(
+            delete_entry_impl(&state, id),
+            Err(AppError::EntryNotFound)
+        ));
+    }
+
+    #[test]
+    fn trash_operations_require_an_unlocked_vault() {
+        let state = locked_state();
+        assert!(matches!(restore_entry_impl(&state, 1), Err(AppError::Locked)));
+        assert!(matches!(purge_entry_impl(&state, 1), Err(AppError::Locked)));
+        assert!(matches!(purge_all_entries_impl(&state), Err(AppError::Locked)));
+        assert!(matches!(
+            list_deleted_entries_impl(&state),
+            Err(AppError::Locked)
+        ));
+    }
+
+    #[test]
+    fn restoring_something_that_is_not_trashed_reports_not_found() {
+        let state = unlocked_state();
+        let id = create_entry_impl(&state, sample_input()).unwrap();
+        assert!(matches!(
+            restore_entry_impl(&state, id),
+            Err(AppError::EntryNotFound)
+        ));
+        assert!(matches!(
+            restore_entry_impl(&state, 9999),
+            Err(AppError::EntryNotFound)
+        ));
+    }
 
     #[test]
     fn encrypt_optional_returns_none_for_none() {

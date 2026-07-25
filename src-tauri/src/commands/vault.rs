@@ -346,6 +346,9 @@ fn change_master_password_impl(
             Option<Vec<u8>>,
             Option<Vec<u8>>,
         );
+        // Deliberately unfiltered: trashed entries are still encrypted with the
+        // vault key, so skipping them would leave rows that nothing can decrypt
+        // once they are restored.
         let mut stmt = tx.prepare(
             "SELECT id, encrypted_password, password_nonce,
                     encrypted_notes, notes_nonce,
@@ -487,6 +490,41 @@ mod tests {
             )
             .unwrap();
         guard.conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn rekey_re_encrypts_trashed_entries_too() {
+        // A trashed entry is still encrypted with the vault key. If the
+        // re-encryption sweep skipped it, restoring it after a password change
+        // would hand back a row that no key in existence can decrypt.
+        let state = state_with_vault();
+        let live = insert_entry(&state, "Live", "live-password", None);
+        let trashed = insert_entry(&state, "Trashed", "trashed-password", Some("still here"));
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries SET deleted_at = '2026-07-01T00:00:00Z'
+                 WHERE id = ?1",
+                [trashed],
+            )
+            .unwrap();
+
+        change_master_password_impl(&state, PW_OLD.into(), PW_NEW.into()).unwrap();
+
+        // Both decrypt under the NEW key that is now in state.
+        assert_eq!(decrypt_entry(&state, live).0, "live-password");
+        assert_eq!(
+            decrypt_entry(&state, trashed),
+            ("trashed-password".to_string(), Some("still here".to_string()))
+        );
+
+        // And they survive a full lock/unlock with the new password.
+        state.inner.lock().unwrap().key = None;
+        unlock_vault_impl(&state, PW_NEW.into()).unwrap();
+        assert_eq!(decrypt_entry(&state, trashed).0, "trashed-password");
     }
 
     fn decrypt_entry(state: &AppState, id: i64) -> (String, Option<String>) {

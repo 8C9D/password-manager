@@ -311,9 +311,9 @@ export class EntryDetailComponent implements OnDestroy {
 
   protected async onDelete(id: number, title: string): Promise<void> {
     const ok = await this.confirmSvc.ask({
-      title: 'Delete entry?',
-      message: `"${title}" will be permanently deleted. This cannot be undone.`,
-      confirmLabel: 'Delete',
+      title: 'Move to trash?',
+      message: `"${title}" will be moved to the trash. You can restore it from there, or delete it permanently.`,
+      confirmLabel: 'Move to trash',
       danger: true,
     });
     if (!ok) return;

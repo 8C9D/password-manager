@@ -160,6 +160,7 @@ fn gather_payload(
                 e.password_changed_at, e.id
          FROM password_entries e
          LEFT JOIN categories c ON c.id = e.category_id
+         WHERE e.deleted_at IS NULL
          ORDER BY e.id",
     )?;
     struct Row {
@@ -1400,6 +1401,38 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn export_leaves_trashed_entries_out() {
+        // The trash is pending deletion, not vault content: carrying it into a
+        // backup would quietly resurrect entries the user deleted.
+        let source = state_with_vault(PW);
+        add_entry(&source, "Keep", "keep-me", None, None);
+        add_entry(&source, "Tossed", "toss-me", None, None);
+        source
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries SET deleted_at = '2026-07-01T00:00:00Z'
+                 WHERE title = 'Tossed'",
+                [],
+            )
+            .unwrap();
+
+        let file = TempFile::new("export-trash.json");
+        export_vault_impl(&source, PW.into(), &file.0).unwrap();
+
+        let target = state_with_vault(PW);
+        let summary = import_vault_impl(&target, &file.0, PW.into()).unwrap();
+        assert_eq!(summary.entries_imported, 1);
+        let titles: Vec<String> = decrypted_entries(&target)
+            .into_iter()
+            .map(|(t, _, _, _)| t)
+            .collect();
+        assert_eq!(titles, vec!["Keep".to_string()]);
     }
 
     #[test]

@@ -12,8 +12,15 @@
     />
     <div class="spacer"></div>
     <a routerLink="/vault/new" class="btn primary" title="New entry (Ctrl/Cmd+N)">+ Add entry</a>
-    <a routerLink="/vault/health" class="btn" title="Vault health">🛡</a>
-    <a routerLink="/vault/settings" class="btn" title="Settings">⚙</a>
+    <a routerLink="/vault/health" class="btn" title="Vault health" aria-label="Vault health">
+      <span aria-hidden="true">🛡</span>
+    </a>
+    <a routerLink="/vault/trash" class="btn" title="Trash" aria-label="Trash">
+      <span aria-hidden="true">🗑</span>
+    </a>
+    <a routerLink="/vault/settings" class="btn" title="Settings" aria-label="Settings">
+      <span aria-hidden="true">⚙</span>
+    </a>
     <button class="btn" type="button" title="Lock vault (Ctrl/Cmd+L)" (click)="onLock()">
       Lock
     </button>

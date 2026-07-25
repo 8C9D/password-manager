@@ -99,9 +99,11 @@ fn list_password_history_impl(
         // recorded history returns an empty list.
         let exists: Option<i64> = s
             .conn
-            .query_row("SELECT id FROM password_entries WHERE id = ?1", [id], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT id FROM password_entries WHERE id = ?1 AND deleted_at IS NULL",
+                [id],
+                |r| r.get(0),
+            )
             .optional()?;
         if exists.is_none() {
             return Err(AppError::EntryNotFound);

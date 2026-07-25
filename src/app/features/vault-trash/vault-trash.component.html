@@ -1,0 +1,65 @@
+<div class="trash">
+  <header class="head">
+    <h2>Trash</h2>
+    @if (items().length > 0) {
+      <button
+        type="button"
+        class="btn small danger"
+        (click)="onEmpty()"
+        [disabled]="emptying() || busyId() !== null"
+      >
+        {{ emptying() ? 'Emptying…' : 'Empty trash' }}
+      </button>
+    }
+  </header>
+
+  @if (loading()) {
+    <p class="muted">Loading…</p>
+  } @else {
+    @if (error()) {
+      <p class="warn" role="alert">{{ error() }}</p>
+    }
+    @if (items().length === 0) {
+      <p class="ok">
+        The trash is empty. Deleted entries are kept here until you delete them
+        permanently, so a misclick is always recoverable.
+      </p>
+    } @else {
+      <p class="muted small">
+        These entries are hidden from the vault but still stored, encrypted, and
+        can be restored. They are left out of exports and health scans.
+      </p>
+      <ul class="items">
+        @for (item of items(); track item.id) {
+          <li>
+            <div class="meta">
+              <span class="title">{{ item.title }}</span>
+              <span class="sub">
+                {{ item.username || item.urlOrAppName || 'No username' }} · deleted
+                {{ formatDate(item.deletedAt) }}
+              </span>
+            </div>
+            <div class="actions">
+              <button
+                type="button"
+                class="btn small"
+                (click)="onRestore(item)"
+                [disabled]="busyId() !== null || emptying()"
+              >
+                Restore
+              </button>
+              <button
+                type="button"
+                class="btn small danger"
+                (click)="onPurge(item)"
+                [disabled]="busyId() !== null || emptying()"
+              >
+                Delete forever
+              </button>
+            </div>
+          </li>
+        }
+      </ul>
+    }
+  }
+</div>

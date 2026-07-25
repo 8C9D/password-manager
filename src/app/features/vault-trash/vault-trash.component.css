@@ -1,0 +1,71 @@
+:host {
+  display: block;
+  height: 100%;
+}
+.trash {
+  padding: 1.25rem 1.5rem;
+  max-width: 720px;
+}
+.head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.head h2 {
+  flex: 1;
+  margin: 0;
+}
+.muted {
+  color: var(--muted);
+}
+.small {
+  font-size: 0.85rem;
+}
+.warn {
+  color: var(--danger);
+}
+.ok {
+  color: var(--muted);
+  padding: 0.75rem 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.items {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.items li {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.title {
+  font-weight: 500;
+  word-break: break-all;
+}
+.sub {
+  font-size: 0.78rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+.actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
