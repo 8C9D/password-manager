@@ -197,6 +197,7 @@ mod tests {
             totp: TotpUpdate::Keep,
             favorite: false,
             tags: vec![],
+            password_expiry_days: None,
         }
     }
 

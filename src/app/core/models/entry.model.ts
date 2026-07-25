@@ -25,6 +25,10 @@ export interface EntryFull {
   hasTotp: boolean;
   favorite: boolean;
   tags: string[];
+  /** Days between password changes before a rotation reminder fires. */
+  passwordExpiryDays: number | null;
+  /** When the password is next due for rotation, or null with no reminder. */
+  passwordDueAt: string | null;
 }
 
 /** How an entry write should treat the stored TOTP secret. */
@@ -43,6 +47,7 @@ export interface EntryInput {
   totp?: TotpUpdate;
   favorite?: boolean;
   tags?: string[];
+  passwordExpiryDays?: number | null;
 }
 
 /** An entry sitting in the trash: restorable until it is purged. */
@@ -73,6 +78,7 @@ export interface EntryIssue {
   weak: boolean;
   reused: boolean;
   stale: boolean;
+  due: boolean;
 }
 
 export interface VaultHealth {
@@ -80,6 +86,7 @@ export interface VaultHealth {
   weakCount: number;
   reusedCount: number;
   staleCount: number;
+  dueCount: number;
   issues: EntryIssue[];
 }
 

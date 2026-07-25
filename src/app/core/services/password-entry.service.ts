@@ -115,6 +115,40 @@ export function parseTagsInput(input: string): string[] {
     .filter((t) => t !== '');
 }
 
+/** Longest rotation reminder the backend accepts. */
+export const MAX_EXPIRY_DAYS = 3650;
+
+/**
+ * Turn the rotation-reminder field into what the backend expects: null for
+ * "no reminder" (blank, zero, or anything that is not a usable whole number of
+ * days), otherwise the clamped day count.
+ */
+export function parseExpiryDays(value: number | string): number | null {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.min(n, MAX_EXPIRY_DAYS);
+}
+
+/**
+ * How a rotation reminder should read in the UI, given the due date and now.
+ * Returns null when there is no reminder.
+ */
+export function describeDue(
+  dueAtIso: string | null,
+  now: Date = new Date(),
+): { text: string; overdue: boolean } | null {
+  if (!dueAtIso) return null;
+  const due = new Date(dueAtIso);
+  if (Number.isNaN(due.getTime())) return null;
+  const days = Math.round((due.getTime() - now.getTime()) / 86_400_000);
+  if (days < 0) {
+    const n = Math.abs(days);
+    return { text: `Overdue by ${n} ${n === 1 ? 'day' : 'days'}`, overdue: true };
+  }
+  if (days === 0) return { text: 'Due today', overdue: true };
+  return { text: `Due in ${days} ${days === 1 ? 'day' : 'days'}`, overdue: false };
+}
+
 export type EntrySortMode = 'title' | 'recently-used' | 'recently-created';
 
 export function sortEntries(
@@ -195,6 +229,7 @@ export function describeIssue(issue: EntryIssue): string[] {
   if (issue.weak) labels.push('Weak');
   if (issue.reused) labels.push('Reused');
   if (issue.stale) labels.push('Old');
+  if (issue.due) labels.push('Due');
   return labels;
 }
 

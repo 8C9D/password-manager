@@ -28,13 +28,18 @@
         <span class="num">{{ h.staleCount }}</span>
         <span class="cap">old</span>
       </div>
+      <div class="tile" [class.bad]="h.dueCount > 0">
+        <span class="num">{{ h.dueCount }}</span>
+        <span class="cap">due</span>
+      </div>
     </div>
 
     @if (h.issues.length === 0) {
       <p class="ok">No issues found. Every password is unique, long enough, and recent.</p>
     } @else {
       <p class="muted">
-        Weak = short or low variety · Reused = shared with another entry · Old = unchanged for over a year.
+        Weak = short or low variety · Reused = shared with another entry · Old = unchanged for over
+        a year · Due = past the rotation reminder set on the entry.
       </p>
       <ul class="issues">
         @for (issue of h.issues; track issue.id) {

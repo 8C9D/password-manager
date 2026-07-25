@@ -144,3 +144,8 @@ dd {
   flex: 0 0 auto;
   font-size: 0.78rem;
 }
+
+.overdue {
+  color: var(--danger);
+  font-weight: 500;
+}

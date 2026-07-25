@@ -113,6 +113,10 @@ struct ExportEntry {
     /// export files (which had no history) readable.
     #[serde(default)]
     password_history: Vec<ExportHistoryItem>,
+    /// Per-entry rotation reminder in days. Older export files lack it, which
+    /// correctly reads as "no reminder".
+    #[serde(default)]
+    password_expiry_days: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -157,7 +161,7 @@ fn gather_payload(
                 e.encrypted_notes, e.notes_nonce,
                 c.name, e.created_at, e.updated_at, e.last_used_at,
                 e.encrypted_totp, e.totp_nonce, e.is_favorite, e.tags,
-                e.password_changed_at, e.id
+                e.password_changed_at, e.password_expiry_days, e.id
          FROM password_entries e
          LEFT JOIN categories c ON c.id = e.category_id
          WHERE e.deleted_at IS NULL
@@ -181,6 +185,7 @@ fn gather_payload(
         is_favorite: bool,
         tags: String,
         password_changed_at: Option<String>,
+        password_expiry_days: Option<u32>,
     }
     let rows: Vec<Row> = stmt
         .query_map([], |r| {
@@ -201,7 +206,8 @@ fn gather_payload(
                 is_favorite: r.get(13)?,
                 tags: r.get(14)?,
                 password_changed_at: r.get(15)?,
-                id: r.get(16)?,
+                password_expiry_days: r.get(16)?,
+                id: r.get(17)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -265,6 +271,7 @@ fn gather_payload(
             tags: crate::commands::entries::tags_from_json(&row.tags),
             password_changed_at: row.password_changed_at,
             password_history,
+            password_expiry_days: row.password_expiry_days,
         });
     }
     drop(history_stmt);
@@ -654,8 +661,9 @@ fn import_vault_impl(
                      encrypted_notes, notes_nonce,
                      encrypted_totp, totp_nonce,
                      created_at, updated_at, last_used_at, is_favorite, tags,
-                     password_changed_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                     password_changed_at, password_expiry_days)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                         ?14, ?15, ?16, ?17)",
                 rusqlite::params![
                     category_id,
                     entry.title,
@@ -676,6 +684,7 @@ fn import_vault_impl(
                         .password_changed_at
                         .as_deref()
                         .unwrap_or(&entry.updated_at),
+                    entry.password_expiry_days.filter(|d| *d > 0),
                 ],
             )?;
 
@@ -1401,6 +1410,53 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn export_import_carries_the_rotation_reminder() {
+        let source = state_with_vault(PW);
+        add_entry(&source, "Email", "pw", None, None);
+        source
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries SET password_expiry_days = 90 WHERE title = 'Email'",
+                [],
+            )
+            .unwrap();
+
+        let file = TempFile::new("export-expiry.json");
+        export_vault_impl(&source, PW.into(), &file.0).unwrap();
+
+        let target = state_with_vault(PW);
+        import_vault_impl(&target, &file.0, PW.into()).unwrap();
+
+        let days: Option<u32> = target
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .query_row(
+                "SELECT password_expiry_days FROM password_entries WHERE title = 'Email'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(days, Some(90), "rotation reminder must survive export/import");
+    }
+
+    #[test]
+    fn an_export_file_without_the_reminder_field_imports_as_no_reminder() {
+        // Files written before the column existed must stay readable.
+        let entry: ExportEntry = serde_json::from_str(
+            r#"{"title":"Old","username":"u","urlOrAppName":"x","password":"p",
+                "notes":null,"category":null,"createdAt":"2026-01-01T00:00:00Z",
+                "updatedAt":"2026-01-01T00:00:00Z","lastUsedAt":null}"#,
+        )
+        .unwrap();
+        assert_eq!(entry.password_expiry_days, None);
     }
 
     #[test]

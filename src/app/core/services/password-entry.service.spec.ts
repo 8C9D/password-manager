@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import { EntrySummary } from '../models/entry.model';
 import {
+  describeDue,
   describeIssue,
   filterEntries,
   formatTotpCode,
+  MAX_EXPIRY_DAYS,
+  parseExpiryDays,
   parseHttpUrl,
   parseTagsInput,
   sortEntries,
@@ -226,7 +229,7 @@ describe('totpActionFrom', () => {
 });
 
 describe('describeIssue', () => {
-  const base = { id: 1, title: 'X', weak: false, reused: false, stale: false };
+  const base = { id: 1, title: 'X', weak: false, reused: false, stale: false, due: false };
 
   it('lists only the flagged problems, in a stable order', () => {
     expect(describeIssue({ ...base, weak: true, reused: true })).toEqual([
@@ -237,6 +240,10 @@ describe('describeIssue', () => {
     expect(
       describeIssue({ ...base, weak: true, reused: true, stale: true }),
     ).toEqual(['Weak', 'Reused', 'Old']);
+    expect(describeIssue({ ...base, due: true })).toEqual(['Due']);
+    expect(
+      describeIssue({ ...base, weak: true, reused: true, stale: true, due: true }),
+    ).toEqual(['Weak', 'Reused', 'Old', 'Due']);
   });
 
   it('returns an empty list when nothing is wrong', () => {
@@ -278,5 +285,49 @@ describe('sortEntries favorites', () => {
       'Apple',
       'Mango',
     ]);
+  });
+});
+
+describe('parseExpiryDays', () => {
+  it('turns a positive whole number of days into a reminder', () => {
+    expect(parseExpiryDays(90)).toBe(90);
+    expect(parseExpiryDays('30')).toBe(30);
+  });
+
+  it('treats blank, zero, and negatives as no reminder', () => {
+    expect(parseExpiryDays('')).toBeNull();
+    expect(parseExpiryDays(0)).toBeNull();
+    expect(parseExpiryDays(-5)).toBeNull();
+    expect(parseExpiryDays('not a number')).toBeNull();
+  });
+
+  it('truncates fractions and clamps to the backend maximum', () => {
+    expect(parseExpiryDays(90.7)).toBe(90);
+    expect(parseExpiryDays(MAX_EXPIRY_DAYS + 100)).toBe(MAX_EXPIRY_DAYS);
+  });
+});
+
+describe('describeDue', () => {
+  const now = new Date('2026-07-01T12:00:00Z');
+  const inDays = (n: number) =>
+    new Date(now.getTime() + n * 86_400_000).toISOString();
+
+  it('reports nothing when there is no reminder', () => {
+    expect(describeDue(null, now)).toBeNull();
+  });
+
+  it('counts down to a future due date', () => {
+    expect(describeDue(inDays(10), now)).toEqual({ text: 'Due in 10 days', overdue: false });
+    expect(describeDue(inDays(1), now)).toEqual({ text: 'Due in 1 day', overdue: false });
+  });
+
+  it('marks today and anything past it as overdue', () => {
+    expect(describeDue(inDays(0), now)).toEqual({ text: 'Due today', overdue: true });
+    expect(describeDue(inDays(-1), now)).toEqual({ text: 'Overdue by 1 day', overdue: true });
+    expect(describeDue(inDays(-45), now)).toEqual({ text: 'Overdue by 45 days', overdue: true });
+  });
+
+  it('reports nothing for an unparseable date rather than a wrong countdown', () => {
+    expect(describeDue('not a date', now)).toBeNull();
   });
 });

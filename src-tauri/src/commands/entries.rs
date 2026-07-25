@@ -37,6 +37,10 @@ pub struct EntryInput {
     pub favorite: bool,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Days after a password change before this entry is due for rotation.
+    /// `None` (and 0) mean no reminder.
+    #[serde(default)]
+    pub password_expiry_days: Option<u32>,
 }
 
 /// Normalize tags: trim, drop blanks, and de-duplicate while preserving order.
@@ -89,6 +93,9 @@ pub struct EntryFull {
     pub has_totp: bool,
     pub favorite: bool,
     pub tags: Vec<String>,
+    pub password_expiry_days: Option<u32>,
+    /// When this password is next due for rotation, or `None` with no reminder.
+    pub password_due_at: Option<String>,
 }
 
 fn validate_input(input: &EntryInput) -> Result<(), AppError> {
@@ -98,7 +105,52 @@ fn validate_input(input: &EntryInput) -> Result<(), AppError> {
     if input.password.is_empty() {
         return Err(AppError::Validation("password is required"));
     }
+    if let Some(days) = input.password_expiry_days {
+        if days > MAX_EXPIRY_DAYS {
+            return Err(AppError::Validation(
+                "rotation reminder must be 3650 days or fewer",
+            ));
+        }
+    }
     Ok(())
+}
+
+/// Ten years: past this a reminder is indistinguishable from none, and the
+/// bound keeps the value in a range the date arithmetic can't overflow.
+pub(crate) const MAX_EXPIRY_DAYS: u32 = 3650;
+
+/// Normalize the wire value: 0 and `None` both mean "no reminder", stored NULL.
+fn expiry_to_column(days: Option<u32>) -> Option<u32> {
+    days.filter(|d| *d > 0)
+}
+
+/// When the password is next due for rotation: the last change plus the
+/// entry's reminder interval.
+///
+/// `None` when there is no reminder, or when the stored timestamp cannot be
+/// parsed - an unreadable date must not manufacture a due date out of nothing.
+pub(crate) fn password_due_at(
+    password_changed_at: Option<&str>,
+    expiry_days: Option<u32>,
+) -> Option<String> {
+    let days = expiry_to_column(expiry_days)?;
+    let changed = chrono::DateTime::parse_from_rfc3339(password_changed_at?).ok()?;
+    let due = changed.with_timezone(&chrono::Utc) + chrono::Duration::days(i64::from(days));
+    Some(due.to_rfc3339())
+}
+
+/// Whether a rotation reminder has come due as of `now`.
+pub(crate) fn password_is_due(
+    password_changed_at: Option<&str>,
+    expiry_days: Option<u32>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    match password_due_at(password_changed_at, expiry_days) {
+        Some(due) => chrono::DateTime::parse_from_rfc3339(&due)
+            .map(|d| now >= d.with_timezone(&chrono::Utc))
+            .unwrap_or(false),
+        None => false,
+    }
 }
 
 /// Encrypted bytes paired with their nonce for an optional field; both are
@@ -150,9 +202,10 @@ fn create_entry_impl(state: &AppState, input: EntryInput) -> Result<i64, AppErro
                  encrypted_password, password_nonce,
                  encrypted_notes, notes_nonce,
                  encrypted_totp, totp_nonce,
-                 is_favorite, tags,
+                 is_favorite, tags, password_expiry_days,
                  created_at, updated_at, last_used_at, password_changed_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, NULL, ?13)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                     ?14, ?14, NULL, ?14)",
             rusqlite::params![
                 input.category_id,
                 input.title.trim(),
@@ -166,6 +219,7 @@ fn create_entry_impl(state: &AppState, input: EntryInput) -> Result<i64, AppErro
                 totp_nonce,
                 input.favorite,
                 tags,
+                expiry_to_column(input.password_expiry_days),
                 now,
             ],
         )?;
@@ -230,6 +284,8 @@ struct EntryRow {
     has_totp: bool,
     favorite: bool,
     tags: Vec<String>,
+    password_expiry_days: Option<u32>,
+    password_changed_at: Option<String>,
 }
 
 fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
@@ -242,7 +298,8 @@ fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
                         encrypted_notes, notes_nonce,
                         created_at, updated_at,
                         encrypted_totp IS NOT NULL,
-                        is_favorite, tags
+                        is_favorite, tags, password_expiry_days,
+                        COALESCE(password_changed_at, updated_at)
                  FROM password_entries WHERE id = ?1 AND deleted_at IS NULL",
                 [id],
                 |r| {
@@ -261,6 +318,8 @@ fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
                         has_totp: r.get(11)?,
                         favorite: r.get(12)?,
                         tags: tags_from_json(&r.get::<_, String>(13)?),
+                        password_expiry_days: r.get(14)?,
+                        password_changed_at: r.get(15)?,
                     })
                 },
             )
@@ -303,6 +362,11 @@ fn get_entry_impl(state: &AppState, id: i64) -> Result<EntryFull, AppError> {
             has_totp: row.has_totp,
             favorite: row.favorite,
             tags: row.tags,
+            password_expiry_days: row.password_expiry_days,
+            password_due_at: password_due_at(
+                row.password_changed_at.as_deref(),
+                row.password_expiry_days,
+            ),
         })
     })
 }
@@ -346,9 +410,10 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
                 notes_nonce = ?8,
                 is_favorite = ?9,
                 tags = ?10,
-                updated_at = ?11,
-                password_changed_at = CASE WHEN ?12 THEN ?11 ELSE password_changed_at END
-             WHERE id = ?13",
+                password_expiry_days = ?11,
+                updated_at = ?12,
+                password_changed_at = CASE WHEN ?13 THEN ?12 ELSE password_changed_at END
+             WHERE id = ?14",
             rusqlite::params![
                 input.category_id,
                 input.title.trim(),
@@ -360,6 +425,7 @@ fn update_entry_impl(state: &AppState, id: i64, input: EntryInput) -> Result<(),
                 notes_nonce,
                 input.favorite,
                 tags,
+                expiry_to_column(input.password_expiry_days),
                 now,
                 password_changed,
                 id,
@@ -646,11 +712,126 @@ mod tests {
             totp: TotpUpdate::Keep,
             favorite: false,
             tags: vec![],
+            password_expiry_days: None,
         }
     }
 
     // RFC 6238 SHA1 seed, base32-encoded; code at t=59 is 287082 (6-digit).
     const RFC_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+    #[test]
+    fn due_date_is_the_last_password_change_plus_the_interval() {
+        let due = password_due_at(Some("2026-01-01T00:00:00Z"), Some(90)).unwrap();
+        assert!(due.starts_with("2026-04-01T00:00:00"), "got {due}");
+    }
+
+    #[test]
+    fn no_reminder_means_no_due_date() {
+        assert!(password_due_at(Some("2026-01-01T00:00:00Z"), None).is_none());
+        // Zero is the "off" value the UI sends when the field is cleared.
+        assert!(password_due_at(Some("2026-01-01T00:00:00Z"), Some(0)).is_none());
+    }
+
+    #[test]
+    fn an_unparseable_change_time_yields_no_due_date_rather_than_a_wrong_one() {
+        assert!(password_due_at(Some("not a date"), Some(30)).is_none());
+        assert!(password_due_at(None, Some(30)).is_none());
+        let now = chrono::Utc::now();
+        assert!(!password_is_due(Some("not a date"), Some(30), now));
+    }
+
+    #[test]
+    fn a_reminder_comes_due_on_its_date_and_not_before() {
+        let changed = "2026-01-01T00:00:00Z";
+        let at = |s: &str| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        assert!(!password_is_due(Some(changed), Some(30), at("2026-01-30T23:59:59Z")));
+        assert!(password_is_due(Some(changed), Some(30), at("2026-01-31T00:00:00Z")));
+        assert!(password_is_due(Some(changed), Some(30), at("2026-06-01T00:00:00Z")));
+    }
+
+    #[test]
+    fn the_reminder_round_trips_through_create_and_update() {
+        let state = unlocked_state();
+        let mut input = sample_input();
+        input.password_expiry_days = Some(90);
+        let id = create_entry_impl(&state, input).unwrap();
+
+        let full = get_entry_impl(&state, id).unwrap();
+        assert_eq!(full.password_expiry_days, Some(90));
+        assert!(full.password_due_at.is_some());
+
+        // Clearing it with 0 stores NULL, not 0.
+        let mut cleared = sample_input();
+        cleared.password_expiry_days = Some(0);
+        update_entry_impl(&state, id, cleared).unwrap();
+        let full = get_entry_impl(&state, id).unwrap();
+        assert_eq!(full.password_expiry_days, None);
+        assert_eq!(full.password_due_at, None);
+    }
+
+    #[test]
+    fn rotating_the_password_pushes_the_due_date_out() {
+        let state = unlocked_state();
+        let mut input = sample_input();
+        input.password_expiry_days = Some(1);
+        let id = create_entry_impl(&state, input).unwrap();
+        let first_due = get_entry_impl(&state, id).unwrap().password_due_at.unwrap();
+
+        // Backdate the change so the reminder is already overdue.
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries SET password_changed_at = '2020-01-01T00:00:00Z'
+                 WHERE id = ?1",
+                [id],
+            )
+            .unwrap();
+        assert!(get_entry_impl(&state, id)
+            .unwrap()
+            .password_due_at
+            .unwrap()
+            .starts_with("2020-01-02"));
+
+        // Changing the password resets the clock; a metadata-only edit must not.
+        let mut renamed = sample_input();
+        renamed.password_expiry_days = Some(1);
+        renamed.title = "Renamed".into();
+        update_entry_impl(&state, id, renamed).unwrap();
+        assert!(get_entry_impl(&state, id)
+            .unwrap()
+            .password_due_at
+            .unwrap()
+            .starts_with("2020-01-02"));
+
+        let mut rotated = sample_input();
+        rotated.password_expiry_days = Some(1);
+        rotated.password = "a-brand-new-password".into();
+        update_entry_impl(&state, id, rotated).unwrap();
+        let after = get_entry_impl(&state, id).unwrap().password_due_at.unwrap();
+        assert!(after > first_due, "{after} should be later than {first_due}");
+    }
+
+    #[test]
+    fn an_absurd_reminder_interval_is_rejected() {
+        let state = unlocked_state();
+        let mut input = sample_input();
+        input.password_expiry_days = Some(MAX_EXPIRY_DAYS + 1);
+        assert!(matches!(
+            create_entry_impl(&state, input),
+            Err(AppError::Validation(_))
+        ));
+
+        let mut ok = sample_input();
+        ok.password_expiry_days = Some(MAX_EXPIRY_DAYS);
+        assert!(create_entry_impl(&state, ok).is_ok());
+    }
 
     #[test]
     fn delete_moves_an_entry_to_the_trash_instead_of_destroying_it() {
@@ -962,6 +1143,7 @@ mod tests {
                 totp: TotpUpdate::Keep,
                 favorite: false,
                 tags: vec![],
+                password_expiry_days: None,
             },
         )
         .unwrap();

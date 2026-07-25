@@ -57,6 +57,14 @@ const MIGRATIONS: &[Migration] = &[
         sql: "ALTER TABLE password_entries ADD COLUMN deleted_at TEXT;
               CREATE INDEX idx_entries_deleted ON password_entries(deleted_at);",
     },
+    Migration {
+        version: 6,
+        // Per-entry rotation reminder, in days from password_changed_at. NULL
+        // means no reminder, which is the default and what every existing row
+        // gets. Distinct from the health scan's fixed 365-day staleness rule:
+        // this one is the user's own cadence for one account.
+        sql: "ALTER TABLE password_entries ADD COLUMN password_expiry_days INTEGER;",
+    },
 ];
 
 #[cfg(test)]

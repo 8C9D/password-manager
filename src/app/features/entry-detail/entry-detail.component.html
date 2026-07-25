@@ -108,6 +108,15 @@
 
       <dt>Last viewed</dt>
       <dd><span class="value muted">{{ e.lastUsedAt ? formatDate(e.lastUsedAt) : 'just now' }}</span></dd>
+
+      @if (due(); as d) {
+        <dt>Rotation</dt>
+        <dd>
+          <span class="value" [class.overdue]="d.overdue" [class.muted]="!d.overdue">
+            {{ d.text }} · every {{ e.passwordExpiryDays }} days
+          </span>
+        </dd>
+      }
     </dl>
 
     <section class="history">

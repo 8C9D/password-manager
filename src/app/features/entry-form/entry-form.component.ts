@@ -6,6 +6,7 @@ import { Category } from '../../core/models/category.model';
 import { EntryInput } from '../../core/models/entry.model';
 import { CategoryService } from '../../core/services/category.service';
 import {
+  parseExpiryDays,
   parseTagsInput,
   PasswordEntryService,
   totpActionFrom,
@@ -51,6 +52,7 @@ export class EntryFormComponent implements OnInit {
   protected hasExistingTotp = false;
   protected favorite = false;
   protected tagsInput = '';
+  protected passwordExpiryDays: number | string = '';
 
   protected readonly busy = signal(false);
   protected readonly loading = signal(true);
@@ -103,6 +105,7 @@ export class EntryFormComponent implements OnInit {
         this.hasExistingTotp = sourceId !== null ? false : full.hasTotp;
         this.favorite = full.favorite;
         this.tagsInput = full.tags.join(', ');
+        this.passwordExpiryDays = full.passwordExpiryDays ?? '';
         this.duplicating.set(sourceId !== null);
       }
     } catch (e) {
@@ -144,6 +147,7 @@ export class EntryFormComponent implements OnInit {
         totp: totpActionFrom(this.totpSecret, this.removeTotp),
         favorite: this.favorite,
         tags: parseTagsInput(this.tagsInput),
+        passwordExpiryDays: parseExpiryDays(this.passwordExpiryDays),
       };
       const id = this.editingId();
       if (id !== null) {

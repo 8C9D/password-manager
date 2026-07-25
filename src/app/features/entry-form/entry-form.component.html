@@ -53,6 +53,19 @@
         />
       </label>
 
+      <label>
+        Remind me to change this password after (days)
+        <input
+          type="number"
+          name="passwordExpiryDays"
+          [(ngModel)]="passwordExpiryDays"
+          min="0"
+          max="3650"
+          autocomplete="off"
+          placeholder="Leave blank for no reminder"
+        />
+      </label>
+
       <label class="checkbox">
         <input type="checkbox" name="favorite" [(ngModel)]="favorite" />
         Mark as favorite

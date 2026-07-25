@@ -8,6 +8,7 @@ import { CategoryService } from '../../core/services/category.service';
 import { ClipboardService } from '../../core/services/clipboard.service';
 import { ConfirmService } from '../../core/services/confirm.service';
 import {
+  describeDue,
   formatTotpCode,
   parseHttpUrl,
   PasswordEntryService,
@@ -122,6 +123,11 @@ export class EntryDetailComponent implements OnDestroy {
     } finally {
       if (token === this.loadToken) this.loading.set(false);
     }
+  }
+
+  /** The rotation reminder as it should read now, or null if there is none. */
+  protected due(): { text: string; overdue: boolean } | null {
+    return describeDue(this.entry()?.passwordDueAt ?? null);
   }
 
   protected formatTotp(code: string): string {

@@ -1,5 +1,5 @@
 //! Vault health audit: a read-only scan that decrypts every entry's password
-//! in-process and reports weak, reused, and stale passwords. Plaintext never
+//! in-process and reports weak, reused, stale, and due-for-rotation passwords. Plaintext never
 //! leaves the backend - only per-entry issue flags (id, title, which problems)
 //! are returned.
 //!
@@ -35,6 +35,9 @@ pub struct EntryIssue {
     pub weak: bool,
     pub reused: bool,
     pub stale: bool,
+    /// The entry's own rotation reminder has come due (distinct from `stale`,
+    /// which is this scan's fixed one-year rule).
+    pub due: bool,
 }
 
 #[derive(Serialize)]
@@ -44,6 +47,7 @@ pub struct VaultHealth {
     pub weak_count: usize,
     pub reused_count: usize,
     pub stale_count: usize,
+    pub due_count: usize,
     /// Only entries with at least one problem, most-affected first.
     pub issues: Vec<EntryIssue>,
 }
@@ -88,6 +92,7 @@ struct ScannedEntry {
     password_hash: [u8; 32],
     weak: bool,
     stale: bool,
+    due: bool,
 }
 
 fn audit_vault_impl(state: &AppState) -> Result<VaultHealth, AppError> {
@@ -97,22 +102,29 @@ fn audit_vault_impl(state: &AppState) -> Result<VaultHealth, AppError> {
         // in case the migration backfill was ever skipped.
         let mut stmt = s.conn.prepare(
             "SELECT id, title, encrypted_password, password_nonce,
-                    COALESCE(password_changed_at, updated_at)
+                    COALESCE(password_changed_at, updated_at), password_expiry_days
              FROM password_entries
              WHERE deleted_at IS NULL
              ORDER BY title COLLATE NOCASE ASC",
         )?;
-        type Raw = (i64, String, Vec<u8>, Vec<u8>, String);
+        type Raw = (i64, String, Vec<u8>, Vec<u8>, String, Option<u32>);
         let raw: Vec<Raw> = stmt
             .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
         let total = raw.len();
         let mut hash_counts: HashMap<[u8; 32], usize> = HashMap::new();
         let mut scanned = Vec::with_capacity(total);
-        for (id, title, enc, nonce, changed_at) in raw {
+        for (id, title, enc, nonce, changed_at, expiry_days) in raw {
             let pw = Zeroizing::new(crypto::decrypt(key, &enc, &nonce)?);
             let password_hash: [u8; 32] = Sha256::digest(pw.as_slice()).into();
             // from_utf8_lossy borrows for valid UTF-8 (every password written by
@@ -127,6 +139,11 @@ fn audit_vault_impl(state: &AppState) -> Result<VaultHealth, AppError> {
                 }
             };
             let stale = is_stale(&changed_at, now);
+            let due = crate::commands::entries::password_is_due(
+                Some(&changed_at),
+                expiry_days,
+                now,
+            );
             *hash_counts.entry(password_hash).or_insert(0) += 1;
             scanned.push(ScannedEntry {
                 id,
@@ -134,6 +151,7 @@ fn audit_vault_impl(state: &AppState) -> Result<VaultHealth, AppError> {
                 password_hash,
                 weak,
                 stale,
+                due,
             });
         }
 
@@ -141,19 +159,22 @@ fn audit_vault_impl(state: &AppState) -> Result<VaultHealth, AppError> {
             .into_iter()
             .filter_map(|e| {
                 let reused = hash_counts.get(&e.password_hash).copied().unwrap_or(0) > 1;
-                (e.weak || reused || e.stale).then_some(EntryIssue {
+                (e.weak || reused || e.stale || e.due).then_some(EntryIssue {
                     id: e.id,
                     title: e.title,
                     weak: e.weak,
                     reused,
                     stale: e.stale,
+                    due: e.due,
                 })
             })
             .collect();
 
         // Most-affected first, then alphabetical for stable ordering.
         issues.sort_by(|a, b| {
-            let sev = |i: &EntryIssue| u32::from(i.weak) + u32::from(i.reused) + u32::from(i.stale);
+            let sev = |i: &EntryIssue| {
+                u32::from(i.weak) + u32::from(i.reused) + u32::from(i.stale) + u32::from(i.due)
+            };
             sev(b)
                 .cmp(&sev(a))
                 .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
@@ -164,6 +185,7 @@ fn audit_vault_impl(state: &AppState) -> Result<VaultHealth, AppError> {
             weak_count: issues.iter().filter(|i| i.weak).count(),
             reused_count: issues.iter().filter(|i| i.reused).count(),
             stale_count: issues.iter().filter(|i| i.stale).count(),
+            due_count: issues.iter().filter(|i| i.due).count(),
             issues,
         })
     })
@@ -208,6 +230,57 @@ mod tests {
                 rusqlite::params![title, ct.bytes, ct.nonce.as_slice(), updated_at],
             )
             .unwrap();
+    }
+
+    #[test]
+    fn audit_flags_an_entry_whose_own_rotation_reminder_came_due() {
+        let state = unlocked_state();
+        // Strong and well under the one-year staleness rule, so `due` is the
+        // only thing that can flag it.
+        insert_entry(&state, "Email", "aVeryStrongPassword1!", "2026-05-01T00:00:00Z");
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries
+                 SET password_expiry_days = 30, password_changed_at = '2026-05-01T00:00:00Z'
+                 WHERE title = 'Email'",
+                [],
+            )
+            .unwrap();
+
+        let health = audit_vault_impl(&state).unwrap();
+        assert_eq!(health.due_count, 1);
+        assert_eq!(health.weak_count, 0);
+        assert_eq!(health.stale_count, 0);
+        assert_eq!(health.issues.len(), 1);
+        assert!(health.issues[0].due);
+        assert!(!health.issues[0].stale);
+    }
+
+    #[test]
+    fn audit_leaves_an_entry_alone_until_its_reminder_is_due() {
+        let state = unlocked_state();
+        let far_future = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
+        insert_entry(&state, "Email", "aVeryStrongPassword1!", &far_future);
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE password_entries
+                 SET password_expiry_days = 365, password_changed_at = ?1
+                 WHERE title = 'Email'",
+                [&far_future],
+            )
+            .unwrap();
+
+        let health = audit_vault_impl(&state).unwrap();
+        assert_eq!(health.due_count, 0);
+        assert!(health.issues.is_empty());
     }
 
     #[test]
