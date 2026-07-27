@@ -1,21 +1,22 @@
 # Refactor Opportunities
 
-_Last verified 2026-07-25 on `main`. Supersedes the 2026-05-28/29 autopilot reports, whose findings are all resolved._
+_Last verified 2026-07-25 on `main`, after the passphrase / bulk-action / custom-field pass. Supersedes the 2026-05-28/29 autopilot reports, whose findings are all resolved._
 
 ## 1. Repository Overview
 
 A local-only desktop password manager built with **Tauri 2** (Rust backend) and **Angular 21** (TypeScript frontend, standalone components + signals).
 
-- `src-tauri/src/` - Rust backend (~8,300 lines including tests). Commands under `commands/` (vault, entries, history, categories, generator, settings, clipboard, health, transfer), with `crypto/` (Argon2id KDF, AES-256-GCM AEAD, RFC 6238 TOTP), `db/` (rusqlite + bundled SQLite, a baseline `schema.sql` plus a numbered migration list), `state.rs` (mutex-guarded `AppState` with `with_state` / `with_authorized` / `with_unlocked` gates), and `error.rs` (one `AppError` enum serialized to a `{kind, message}` wire shape).
-- `src/app/` - Angular frontend (~5,800 lines including stylesheets). `core/` holds models, one service per backend domain plus `tauri-invoke` / `confirm` / `clipboard` / `auto-lock`, and the `unlockedGuard`. `features/` holds 14 standalone components across 13 directories. The shared design system lives in the global `src/styles.css` (CSS variables plus the `.btn` family).
+- `src-tauri/src/` - Rust backend (~10,500 lines including tests). Commands under `commands/` (vault, entries, history, categories, generator, settings, clipboard, health, transfer), with `crypto/` (Argon2id KDF, AES-256-GCM AEAD, RFC 6238 TOTP), `db/` (rusqlite + bundled SQLite, a baseline `schema.sql` plus a numbered migration list, currently at v7), `state.rs` (mutex-guarded `AppState` with `with_state` / `with_authorized` / `with_unlocked` gates), and `error.rs` (one `AppError` enum serialized to a `{kind, message}` wire shape).
+- `src/app/` - Angular frontend (~7,200 lines including stylesheets). `core/` holds models, one service per backend domain plus `tauri-invoke` / `confirm` / `clipboard` / `auto-lock`, and the `unlockedGuard`. `features/` holds 14 standalone components across 13 directories. The shared design system lives in the global `src/styles.css` (CSS variables plus the `.btn` family).
 
 ## 2. Current Quality
 
-- **Tests:** 230 Rust unit tests, 111 Vitest tests, all green. `cargo clippy --all-targets -D warnings` is clean and `ng build` produces no warnings.
+- **Tests:** 274 Rust unit tests, 139 Vitest tests, all green. `cargo clippy --all-targets -D warnings` is clean and `ng build` produces no warnings.
 - **No** `TODO` / `FIXME` / `HACK` markers, **no** stray debug output, **no** `#[allow(...)]` suppressions, **no** dead imports.
 - **Consistent patterns:** command `_impl` functions behind thin `#[tauri::command]` shims; services follow a uniform `call<T>(…)` + signal shape; components follow a uniform `busy` / `errorMsg` / `formatBackendError` shape; all 14 components use external `templateUrl` / `styleUrl` (no inline templates remain).
 
-The codebase is tidy, and the two single-source-of-truth items from the previous pass are now closed, so only a low-priority test-fixture cleanup remains open.
+The codebase is tidy. The strength-meter banding became a single source of truth this pass (`scoreForBits`), so the exact entropy the passphrase generator reports and the estimate the meter computes are described with the same words.
+Beyond the standing test-fixture cleanup, one new duplication is worth noting below.
 
 ## 3. Open Opportunities
 
@@ -26,6 +27,14 @@ The codebase is tidy, and the two single-source-of-truth items from the previous
 - **Suggested refactor:** A shared `#[cfg(test)]` support module exposing both key variants.
 - **Risk level:** Low, but multi-file test-only churn for modest gain.
 - **Status:** Open, low priority. Self-contained test modules remain a defensible status quo.
+
+### Opportunity 2 - Bounds are declared in Rust and re-declared in TypeScript
+
+- **Location:** `commands/entries.rs` (`MAX_EXPIRY_DAYS`, `MAX_FIELDS_PER_ENTRY`, `MAX_FIELD_LABEL_CHARS`), `commands/generator.rs` (`MIN_WORDS` / `MAX_WORDS` / `MAX_SEPARATOR_CHARS`) against `core/models/generator.model.ts` and `core/services/password-entry.service.ts`.
+- **Problem:** the settings bounds are published by the backend (`get_settings_bounds`) precisely so they are not written twice - but the entry, generator, and custom-field bounds still are, as constants and as `maxlength` / `min` / `max` attributes.
+- **Suggested refactor:** extend `get_settings_bounds` into a general `get_bounds`, or add a second command, and drive the templates from it the way the settings form already is.
+- **Risk level:** Low. The failure mode is mild (a form that refuses a value the backend accepts, or offers one it refuses) and the backend is authoritative either way.
+- **Status:** Open. Worth doing before a fourth set of bounds is added.
 
 ## 4. Resolved
 
@@ -46,6 +55,9 @@ The codebase is tidy, and the two single-source-of-truth items from the previous
 - **Inline component templates and styles** - all 12 components now use `templateUrl` / `styleUrl`.
 
 ## 5. Deliberately Not Changed
+
+- **Custom field labels are stored in the clear.** Values are encrypted like passwords, but labels sit next to `title`, `username`, and `url_or_app_name`, which this vault has always stored unencrypted. Encrypting only the labels would be inconsistent and would still leave those three readable.
+- **The bundled wordlist contains some obscure words.** It is drawn from an unabridged dictionary, which costs memorability but not strength - entropy comes from the size of the list, not from how familiar a word is. A curated list would be better and is a bigger job than it looks.
 
 - **`last_used_at` is written on every `get_entry`.** It records "viewed", not "used". Rather than change the write, the UI now says "Last viewed" and the sort option is labelled "Recently viewed". Making it mean "used" would need a separate signal from the copy action.
 - **CSV import stays lenient.** Bad rows are skipped rather than failing the file, which is the point of the format. The one invariant it now enforces is clipping over-long folder names, because an over-long category imported fine and then could not be renamed.

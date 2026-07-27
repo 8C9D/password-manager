@@ -1,6 +1,6 @@
 # Security Sanity Check
 
-_Last verified 2026-07-25 on `main`, against Angular 21.2.18 / Tauri 2.11 and 32 exposed commands._
+_Last verified 2026-07-25 on `main`, against Angular 21.2.18 / Tauri 2.11 and 37 exposed commands._
 _This is a practical hygiene review, not a formal penetration test or full audit._
 
 ## 1. Scope
@@ -12,7 +12,7 @@ No exploitation, no external network probing.
 
 - **App:** local-only personal password manager. No server, no network sync.
 - **Frontend:** Angular 21 (TypeScript), Vitest tests.
-- **Backend:** Tauri 2 (Rust) exposing 32 `#[tauri::command]`s.
+- **Backend:** Tauri 2 (Rust) exposing 37 `#[tauri::command]`s.
 - **Storage:** SQLite (`rusqlite`, bundled) at `app_data_dir/vault.db`, outside the repo.
 - **Crypto:** Argon2id KDF (m = 64 MiB, t = 3, p = 1) then AES-256-GCM; random salt, fresh per-message nonce; keys and master passwords wrapped in `Zeroizing`.
 - **Env vars:** none used.
@@ -42,6 +42,34 @@ No new vulnerabilities were found in this pass; the items below are defence-in-d
 - **Theme preference is stored in `localStorage`, not the vault.**
   It has to apply on the locked unlock screen, and nothing about it is secret, so no vault data moved out of the encrypted database.
   The stored value is treated as untrusted and narrowed to a known preference on read.
+
+## 4b. Hardening and New Surface, later on 2026-07-25
+
+- **An out-of-range rotation reminder could panic the backend under the state lock.**
+  `import_vault` was the one write path that did not enforce the interval bound `validate_input` applies, so a hand-edited export file could store an absurd value.
+  Reading that entry then reached `DateTime + TimeDelta`, which **panics** on overflow - while the state mutex is held, poisoning it, so every later command failed with `state lock poisoned` until the app restarted.
+  Fixed on both sides: the import validates the bound, and `password_due_at` uses `checked_add_signed` so a hand-edited *database* row cannot panic either.
+  Severity was low (it needs a file the user chose to import) but the blast radius was the whole session.
+
+- **Custom fields are a new encrypt-at-rest table (migration v7).**
+  `entry_fields.encrypted_value` is AES-256-GCM under the vault key with a fresh nonce, exactly like a password.
+  The **label is stored in the clear**, which is the same choice already made for `title`, `username`, and `url_or_app_name`; a label can therefore leak the *kind* of secret but not the secret.
+  The `secret` flag only decides whether the UI masks the value - it is not a second encryption tier.
+  All three ripple paths are wired and each has a regression test that was confirmed to fail without it: the rekey sweep, `gather_payload`, and the import loop.
+  Rows cascade with the entry, so purging destroys the fields too.
+
+- **The save-time reuse check returns a count, never a list.**
+  `count_password_reuse` decrypts live entries in-process and reports how many share the candidate password, excluding the entry being edited.
+  Naming the accounts would put a set of secrets on screen that the user did not ask to see.
+  It is advisory: it never blocks a save.
+
+- **The passphrase generator draws from a bundled 4096-word list with `OsRng`.**
+  Word choice uses `gen_range` (no modulo bias), and the reported entropy is computed from the choices actually made rather than estimated from the text.
+  The wordlist is public, non-secret data compiled into the binary; a test pins its size at 4096, since the 12-bits-per-word claim shown to the user depends on it.
+
+- **Bulk actions write metadata only.**
+  `set_entries_category` / `set_entries_favorite` / `delete_entries` never decrypt a password, so they cannot disturb `password_changed_at` or record spurious history.
+  Each runs in one transaction, is gated by `with_authorized`, caps the id list, and reports the rows the database actually changed rather than the size of the request.
 
 ## 5. Findings
 
@@ -98,8 +126,9 @@ No `.env`, `*.pem`, `*.key`, `id_rsa*`, service-account JSON, or `*.db` / `*.sql
 - **SQL injection:** none. Every query uses bound parameters; no `format!`-built SQL. Sorting uses fixed `COLLATE NOCASE` clauses.
 - **Unsafe Rust / command execution:** none. No `unsafe`, no `std::process`.
 - **Filesystem:** the startup `create_dir_all`, plus export/import paths chosen through the native dialog. Exports are written to a temp file and renamed into place, so a failed write cannot truncate an existing backup.
-- **Input validation, enforced server-side and unit-tested:** master password length; entry title and password non-empty; category name non-empty and 64 *characters* or fewer; generator length 4–256 with at least one class; auto-lock 30 s–24 h; clipboard clear 1–600 s; password-history retention 0–50; TOTP configs validated on import and before every generation.
-- **Import hardening:** encrypted-vault imports hold hand-edited files to the same invariants as the UI write paths. CSV import stays deliberately lenient (bad rows are skipped) but clips over-long folder names to the category limit so imported data cannot become un-editable.
+- **Input validation, enforced server-side and unit-tested:** master password length; entry title and password non-empty; category name non-empty and 64 *characters* or fewer; generator length 4–256 with at least one class; passphrase 3–12 words with a separator of 4 characters or fewer; auto-lock 30 s–24 h; clipboard clear 1–600 s; password-history retention 0–50; rotation reminder 0–3650 days; at most 32 custom fields per entry, each with a non-blank label of 64 characters or fewer and a value of 4096 or fewer; bulk id lists capped at 1000; TOTP configs validated on import and before every generation.
+  Every one of these bounds is counted in **characters**, not bytes.
+- **Import hardening:** encrypted-vault imports hold hand-edited files to the same invariants as the UI write paths, now including the rotation-reminder bound and the custom-field bounds. CSV import stays deliberately lenient (bad rows are skipped) but clips over-long folder names to the category limit so imported data cannot become un-editable.
 - **Password generator:** `OsRng` with `gen_range` (no modulo bias), rejection-sampled so every selected class appears.
 - **Frontend XSS:** no `innerHTML` / `[innerHTML]`, `outerHTML`, `document.write`, `eval`, `javascript:`, `bypassSecurityTrust*`, or `DomSanitizer` usage. Angular auto-escaping is intact.
 - **Logging:** the application emits no log records of its own. `tauri-plugin-log` is enabled at `Info` for framework diagnostics. `database` / `io` / `internal` errors are serialized opaquely so internal detail never reaches the frontend.
